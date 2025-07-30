@@ -1,4 +1,5 @@
 import { PrismaAdapter } from "@auth/prisma-adapter";
+
 import { type DefaultSession, type NextAuthConfig } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 
@@ -47,6 +48,17 @@ export const authConfig = {
      */
   ],
   adapter: PrismaAdapter(db),
+  events: {
+    async createUser({ user }) {
+      const firstOrg = await db.org.findFirst();
+      if (firstOrg) {
+        await db.user.update({
+          where: { id: user.id },
+          data: { orgId: firstOrg.id },
+        });
+      }
+    },
+  },
   callbacks: {
     session: ({ session, user }) => ({
       ...session,
