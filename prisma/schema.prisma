@@ -60,10 +60,16 @@ model User {
     email         String?   @unique
     emailVerified DateTime?
     image         String?
+    role          Role      @default(AE)
+    orgId         String?
+    org           Org?      @relation(fields: [orgId], references: [id])
     accounts      Account[]
     sessions      Session[]
     posts         Post[]
+    quotesCreated Quote[]         @relation("UserCreatedQuotes")
+    approvalSteps ApprovalStep[]  @relation("UserApprovalSteps")
 }
+
 
 model VerificationToken {
     identifier String
@@ -71,4 +77,87 @@ model VerificationToken {
     expires    DateTime
 
     @@unique([identifier, token])
+}
+
+enum Role {
+    AE
+    DEALDESK
+    CRO
+    LEGAL
+    FINANCE
+}
+
+enum PaymentKind {
+    NET
+    PREPAY
+    BOTH
+}
+
+enum QuoteStatus {
+    Draft
+    Pending
+    Approved
+    Rejected
+}
+
+enum ApprovalStatus {
+    Pending
+    Approved
+    Rejected
+    Skipped
+}
+
+model Org {
+    id         String   @id @default(uuid())
+    name       String
+    createdAt  DateTime @default(now())
+
+    users      User[]
+    packages   Package[]
+    quotes     Quote[]
+}
+
+model Package {
+    id          String  @id @default(uuid())
+    orgId       String
+    org         Org     @relation(fields: [orgId], references: [id])
+    name        String
+    description String
+
+    quotes      Quote[]
+}
+
+model Quote {
+    id              String        @id @default(uuid())
+    orgId           String
+    org             Org           @relation(fields: [orgId], references: [id])
+    createdById     String
+    createdBy       User          @relation("UserCreatedQuotes", fields: [createdById], references: [id])
+    packageId       String
+    package         Package       @relation(fields: [packageId], references: [id])
+    quantity        Int
+    customerName    String
+    paymentKind     PaymentKind
+    netDays         Int?
+    prepayPercent   Decimal?
+    subtotal        Decimal
+    discountPercent Decimal
+    total           Decimal
+    status          QuoteStatus   @default(Draft)
+    createdAt       DateTime      @default(now())
+    updatedAt       DateTime      @updatedAt
+
+    approvalWorkflow ApprovalStep[]
+}
+
+model ApprovalStep {
+    id          String          @id @default(uuid())
+    quoteId     String
+    quote       Quote           @relation(fields: [quoteId], references: [id])
+    stepOrder   Int
+    persona     Role
+    approverId  String?
+    approver    User?           @relation("UserApprovalSteps", fields: [approverId], references: [id])
+    status      ApprovalStatus  @default(Pending)
+    approvedAt  DateTime?
 }
