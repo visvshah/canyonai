@@ -13,14 +13,12 @@ import {
   Box,
   Typography,
 } from "@mui/material";
-import HomeIcon from "@mui/icons-material/Home";
 import ListAltIcon from "@mui/icons-material/ListAlt";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 import InsightsIcon from "@mui/icons-material/Insights";
 import { usePathname } from "next/navigation";
 
 const NAV_ITEMS = [
-  { name: "Home", href: "/", icon: HomeIcon },
   { name: "Quotes", href: "/quotes", icon: ListAltIcon },
   { name: "Create Quote", href: "/create-quote", icon: AddCircleOutlineIcon },
   { name: "Insights", href: "/insights", icon: InsightsIcon },
@@ -28,6 +26,10 @@ const NAV_ITEMS = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  // Hide sidebar on landing page
+  if (pathname === "/") {
+    return null;
+  }
   const isActive = (href: string) =>
     pathname === href || (href !== "/" && pathname.startsWith(href));
 

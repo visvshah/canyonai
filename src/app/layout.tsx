@@ -31,8 +31,8 @@ export default function RootLayout({
               component="main"
               sx={{
                 flexGrow: 1,
-                bgcolor: "background.paper",
-                p: 3,
+                bgcolor: "transparent",
+                p: 0,
               }}
             >
               {children}

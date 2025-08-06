@@ -1,22 +1,52 @@
 import Link from "next/link";
+import { auth } from "~/server/auth";
+import { Box, Typography, Button, Stack } from "@mui/material";
 
-// Landing page doesn’t need server components yet.
-// TODO: integrate session check once auth is wired in.
-
-export default function Landing() {
+export default async function Landing() {
+  const session = await auth();
+  const href = session ? "/quotes" : "/api/auth/signin?callbackUrl=/quotes";
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-8 bg-[#091625] p-6 text-center text-white">
-      
-      <p className="max-w-xl text-lg md:text-2xl">
-        Canyon makes quoting and approvals effortless for modern SaaS sales
-        teams.
-      </p>
-      <Link
-        href="/api/auth/signin"
-        className="rounded bg-white px-6 py-3 font-semibold text-[#091625] shadow transition hover:brightness-95"
+    <Box
+      minHeight="100vh"
+      display="flex"
+      flexDirection="column"
+      justifyContent="center"
+      alignItems="center"
+      className="gradient-bg"
+      sx={{ color: "white", textAlign: "center", px: 0 }}
+    >
+      <Typography
+        variant="h3"
+        component="h1"
+        maxWidth={700}
+        mb={3}
+        fontWeight={600}
+        className="fade-up"
       >
-        Sign in with Google
-      </Link>
-    </div>
+        Effortless quoting & approvals.
+      </Typography>
+      <Stack spacing={2} alignItems="center" className="fade-up" sx={{ animationDelay: '0.3s' }}>
+      <Button
+        component={Link}
+        href={href}
+        variant="contained"
+        sx={{
+          bgcolor: "white",
+          color: "#091625",
+          fontWeight: 600,
+          px: 4,
+          py: 1.5,
+          "&:hover": { bgcolor: "#f5f5f5" },
+        }}
+      >
+        Get started
+      </Button>
+      <Typography variant="subtitle2" maxWidth={450}>
+        Automate approvals, eliminate errors, close deals faster.
+      </Typography>
+    </Stack>
+    
+      
+    </Box>
   );
 }
