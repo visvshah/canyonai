@@ -61,7 +61,7 @@ model User {
     emailVerified DateTime?
     image         String?
     role          Role      @default(AE)
-    orgId         String?
+    orgId         String? 
     org           Org?      @relation(fields: [orgId], references: [id])
     accounts      Account[]
     sessions      Session[]
@@ -147,13 +147,21 @@ model Quote {
     createdAt       DateTime      @default(now())
     updatedAt       DateTime      @updatedAt
 
-    approvalWorkflow ApprovalStep[]
+    approvalWorkflow ApprovalWorkflow?
+}
+
+model ApprovalWorkflow {
+    id        String        @id @default(uuid())
+    quoteId   String @unique
+    quote     Quote  @relation(fields: [quoteId], references: [id])
+
+    steps     ApprovalStep[]
 }
 
 model ApprovalStep {
     id          String          @id @default(uuid())
-    quoteId     String
-    quote       Quote           @relation(fields: [quoteId], references: [id])
+    approvalWorkflowId String
+    approvalWorkflow ApprovalWorkflow @relation(fields: [approvalWorkflowId], references: [id])
     stepOrder   Int
     persona     Role
     approverId  String?
