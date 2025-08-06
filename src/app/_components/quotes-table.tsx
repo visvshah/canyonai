@@ -4,6 +4,24 @@ import { useState } from "react";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 import { format } from "date-fns";
+import {
+  Box,
+  TextField,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Paper,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  Button,
+  Chip,
+  CircularProgress,
+  Typography,
+} from "@mui/material";
 
 // Helper types
 export type Quote = RouterOutputs["quote"]["all"][number];
@@ -37,141 +55,152 @@ export function QuotesTable() {
   return (
     <div className="flex w-full flex-col gap-4">
       {/* Search */}
-      <input
-        type="text"
-        placeholder="Search quotes..."
+      <TextField
+        label="Search quotes"
+        variant="outlined"
+        size="small"
+        fullWidth
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        className="w-full rounded-md border border-gray-700 bg-gray-800 p-2 text-sm text-white placeholder-gray-400"
       />
 
       {/* Table */}
       {isLoading ? (
-        <p>Loading...</p>
+        <Box display="flex" justifyContent="center" py={4}>
+          <CircularProgress size={24} />
+        </Box>
       ) : !quotes || quotes.length === 0 ? (
-        <p>No quotes found.</p>
+        <Typography>No quotes found.</Typography>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-700 text-sm">
-            <thead className="bg-gray-800">
-              <tr>
-                <th className="px-4 py-2 text-left font-semibold">Customer</th>
-                <th className="px-4 py-2 text-left font-semibold">Org</th>
-                <th className="px-4 py-2 text-left font-semibold">Status</th>
-                <th className="px-4 py-2 text-left font-semibold">Next Approval</th>
-                <th className="px-4 py-2 text-left font-semibold">Created</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-700">
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Customer</TableCell>
+                <TableCell>Org</TableCell>
+                <TableCell>Status</TableCell>
+                <TableCell>Next Approval</TableCell>
+                <TableCell>Created</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
               {quotes.map((q) => (
-                <tr
+                <TableRow
                   key={q.id}
+                  hover
+                  sx={{ cursor: "pointer" }}
                   onClick={() => setSelected(q)}
-                  className="cursor-pointer hover:bg-gray-800/60"
                 >
-                  <td className="px-4 py-2 font-medium">{q.customerName}</td>
-                  <td className="px-4 py-2">{q.org.name}</td>
-                  <td className="px-4 py-2">{q.status}</td>
-                  <td className="px-4 py-2">{getNextApproval(q)}</td>
-                  <td className="px-4 py-2">
+                  <TableCell>{q.customerName}</TableCell>
+                  <TableCell>{q.org.name}</TableCell>
+                  <TableCell>
+                    <Chip label={q.status} size="small" />
+                  </TableCell>
+                  <TableCell>{getNextApproval(q)}</TableCell>
+                  <TableCell>
                     {format(new Date(q.createdAt), "MMM d, yyyy")}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </TableBody>
+          </Table>
+        </TableContainer>
       )}
 
       {/* Modal */}
-      {selected && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={() => setSelected(null)}
-        >
-          <div
-            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-md bg-gray-900 p-6 shadow-lg"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="mb-4 text-xl font-semibold">{selected.customerName}</h2>
-            <div className="space-y-2 text-sm">
-              <p>
-                <span className="font-semibold">Status:</span> {selected.status}
-              </p>
-              <p>
-                <span className="font-semibold">Org:</span> {selected.org.name}
-              </p>
-              <p>
-                <span className="font-semibold">Payment Kind:</span> {selected.paymentKind}
-              </p>
+      <Dialog
+        open={Boolean(selected)}
+        onClose={() => setSelected(null)}
+        maxWidth="md"
+        fullWidth
+      >
+        {selected && (
+          <>
+            <DialogTitle>{selected.customerName}</DialogTitle>
+            <DialogContent dividers>
+              <Typography variant="body2" gutterBottom>
+                <strong>Status:</strong> {selected.status}
+              </Typography>
+              <Typography variant="body2" gutterBottom>
+                <strong>Org:</strong> {selected.org.name}
+              </Typography>
+              <Typography variant="body2" gutterBottom>
+                <strong>Payment Kind:</strong> {selected.paymentKind}
+              </Typography>
               {selected.paymentKind === "NET" && (
-                <p>
-                  <span className="font-semibold">Net Days:</span> {selected.netDays}
-                </p>
+                <Typography variant="body2" gutterBottom>
+                  <strong>Net Days:</strong> {selected.netDays}
+                </Typography>
               )}
               {selected.paymentKind === "PREPAY" && (
-                <p>
-                  <span className="font-semibold">Prepay %:</span> {selected.prepayPercent?.toString()}
-                </p>
+                <Typography variant="body2" gutterBottom>
+                  <strong>Prepay %:</strong> {selected.prepayPercent?.toString()}
+                </Typography>
               )}
               {selected.paymentKind === "BOTH" && (
                 <>
-                  <p>
-                    <span className="font-semibold">Net Days:</span> {selected.netDays}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Prepay %:</span> {selected.prepayPercent?.toString()}
-                  </p>
+                  <Typography variant="body2" gutterBottom>
+                    <strong>Net Days:</strong> {selected.netDays}
+                  </Typography>
+                  <Typography variant="body2" gutterBottom>
+                    <strong>Prepay %:</strong> {selected.prepayPercent?.toString()}
+                  </Typography>
                 </>
               )}
-              <p>
-                <span className="font-semibold">Subtotal:</span> {selected.subtotal.toString()}
-              </p>
-              <p>
-                <span className="font-semibold">Discount %:</span> {selected.discountPercent.toString()}
-              </p>
-              <p>
-                <span className="font-semibold">Total:</span> {selected.total.toString()}
-              </p>
-              {/* Packages */}
-              <div>
-                <span className="font-semibold">Package:</span> {selected.package.name}
-              </div>
-            </div>
+              <Typography variant="body2" gutterBottom>
+                <strong>Subtotal:</strong> {selected.subtotal.toString()}
+              </Typography>
+              <Typography variant="body2" gutterBottom>
+                <strong>Discount %:</strong> {selected.discountPercent.toString()}
+              </Typography>
+              <Typography variant="body2" gutterBottom>
+                <strong>Total:</strong> {selected.total.toString()}
+              </Typography>
+              {/* Package */}
+              <Typography variant="body2" gutterBottom>
+                <strong>Package:</strong> {selected.package.name}
+              </Typography>
 
-            {/* Approval Steps */}
-            <div className="mt-6">
-              <h3 className="mb-2 font-semibold">Approval Workflow</h3>
-              {selected.approvalWorkflow ? (
-                <ol className="space-y-1 text-sm">
-                  {selected.approvalWorkflow.steps.map((step) => (
-                    <li key={step.id} className="flex items-center gap-2">
-                      <span className="w-20 font-medium">Step {step.stepOrder}</span>
-                      <span className="flex-1">
-                        {step.approver
-                          ? step.approver.name ?? step.approver.email
-                          : step.persona}
-                      </span>
-                      <span className="rounded-md bg-gray-800 px-2 py-1 text-xs uppercase">
-                        {step.status}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <p>No approval workflow.</p>
-              )}
-            </div>
-
-            <button
-              onClick={() => setSelected(null)}
-              className="mt-6 rounded-md bg-white/10 px-4 py-2 text-sm font-semibold hover:bg-white/20"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
+              {/* Approval Workflow */}
+              <Box mt={3}>
+                <Typography variant="subtitle1" gutterBottom>
+                  Approval Workflow
+                </Typography>
+                {selected.approvalWorkflow ? (
+                  <Box component="ol" sx={{ pl: 2 }}>
+                    {selected.approvalWorkflow.steps.map((step) => (
+                      <Box
+                        component="li"
+                        key={step.id}
+                        display="flex"
+                        alignItems="center"
+                        gap={1}
+                      >
+                        <Typography variant="body2" sx={{ width: 80, fontWeight: 500 }}>
+                          Step {step.stepOrder}
+                        </Typography>
+                        <Typography variant="body2" flex={1}>
+                          {step.approver
+                            ? step.approver.name ?? step.approver.email
+                            : step.persona}
+                        </Typography>
+                        <Chip label={step.status} size="small" />
+                      </Box>
+                    ))}
+                  </Box>
+                ) : (
+                  <Typography variant="body2">No approval workflow.</Typography>
+                )}
+              </Box>
+            </DialogContent>
+            <Box display="flex" justifyContent="flex-end" p={2}>
+              <Button onClick={() => setSelected(null)} variant="contained">
+                Close
+              </Button>
+            </Box>
+          </>
+        )}
+      </Dialog>
     </div>
   );
 }

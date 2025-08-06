@@ -11,8 +11,9 @@ export const quoteRouter = createTRPCRouter({
   all: publicProcedure
     .input(z.object({ search: z.string().optional() }).optional())
     .query(async ({ ctx, input }) => {
-  const containsKeyword = (value: string) => ({
+      const containsKeyword = (value: string) => ({
         contains: value,
+        mode: "insensitive" as const,
       });
 
       const where: Prisma.QuoteWhereInput = input?.search

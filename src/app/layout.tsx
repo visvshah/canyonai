@@ -2,6 +2,7 @@ import "~/styles/globals.css";
 
 import { type Metadata } from "next";
 import { Geist } from "next/font/google";
+import { Box } from "@mui/material";
 import Sidebar from "~/components/Sidebar";
 
 import { TRPCReactProvider } from "~/trpc/react";
@@ -22,11 +23,22 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className={`${geist.variable}`}>
-      <body className="flex min-h-screen bg-[#091625] text-white">
-        <Sidebar />
-          <main className="flex-1 bg-white text-[#091625] ml-16 lg:ml-64">
-            <TRPCReactProvider>{children}</TRPCReactProvider>
-          </main>
+      <body>
+        <TRPCReactProvider>
+          <Box sx={{ display: "flex" }}>
+            <Sidebar />
+            <Box
+              component="main"
+              sx={{
+                flexGrow: 1,
+                bgcolor: "background.paper",
+                p: 3,
+              }}
+            >
+              {children}
+            </Box>
+          </Box>
+        </TRPCReactProvider>
       </body>
     </html>
   );
