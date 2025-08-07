@@ -21,7 +21,10 @@ import {
   Chip,
   CircularProgress,
   Typography,
+  IconButton,
 } from "@mui/material";
+import DeleteIcon from "@mui/icons-material/Delete";
+import Collapse from "@mui/material/Collapse";
 
 // Helper types
 export type Quote = RouterOutputs["quote"]["all"][number];
@@ -38,6 +41,66 @@ function getNextApproval(quote: Quote): string {
 }
 
 export function QuotesTable() {
+  const utils = api.useContext();
+  const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
+  
+  // TRPC mutation for deleting approval steps with optimistic update
+  const deleteStep = api.quote.deleteApprovalStep.useMutation({
+    // Optimistic update
+    onMutate: async ({ stepId }) => {
+      // For animation
+      setRemovedIds((prev) => new Set(prev).add(stepId));
+
+      await utils.quote.all.cancel();
+      const prevData = utils.quote.all.getData();
+
+      // Optimistically update cache
+      utils.quote.all.setData(undefined, (old) =>
+        old?.map((q) => {
+          if (!selected || q.id !== selected.id) return q;
+          if (!q.approvalWorkflow) return q;
+          const newSteps = q.approvalWorkflow.steps.filter((s) => s.id !== stepId).map((s, idx) => ({
+            ...s,
+            stepOrder: idx + 1,
+          }));
+          return {
+            ...q,
+            approvalWorkflow: newSteps.length
+              ? { ...q.approvalWorkflow, steps: newSteps }
+              : null,
+            status: newSteps.length ? q.status : "Approved",
+          } as typeof q;
+        }),
+      );
+
+      // Also update selected state local
+      setSelected((prev) => {
+        if (!prev?.approvalWorkflow) return prev;
+        const newSteps = prev.approvalWorkflow.steps.filter((s) => s.id !== stepId).map((s, idx) => ({
+          ...s,
+          stepOrder: idx + 1,
+        }));
+        return {
+          ...prev,
+          approvalWorkflow: newSteps.length ? { ...prev.approvalWorkflow, steps: newSteps } : null,
+          status: newSteps.length ? prev.status : "Approved",
+        } as Quote;
+      });
+
+      return { prevData };
+    },
+    onError: (_err, _vars, ctx) => {
+      // Rollback
+      utils.quote.all.setData(undefined, ctx?.prevData);
+      setRemovedIds(new Set());
+    },
+    onSuccess: () => {
+      /* no-op */
+    },
+    onSettled: () => {
+      void utils.quote.all.invalidate();
+    },
+  });
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Quote | null>(null);
 
@@ -169,23 +232,34 @@ export function QuotesTable() {
                 {selected.approvalWorkflow ? (
                   <Box component="ol" sx={{ pl: 2 }}>
                     {selected.approvalWorkflow.steps.map((step) => (
-                      <Box
-                        component="li"
-                        key={step.id}
-                        display="flex"
-                        alignItems="center"
-                        gap={1}
-                      >
-                        <Typography variant="body2" sx={{ width: 80, fontWeight: 500 }}>
-                          Step {step.stepOrder}
-                        </Typography>
-                        <Typography variant="body2" flex={1}>
-                          {step.approver
-                            ? step.approver.name ?? step.approver.email
-                            : step.persona}
-                        </Typography>
-                        <Chip label={step.status} size="small" />
-                      </Box>
+                      <Collapse in={!removedIds.has(step.id)} key={step.id}>
+                        <Box
+                          component="li"
+                          display="flex"
+                          alignItems="center"
+                          gap={1}
+                        >
+                          <Typography variant="body2" sx={{ width: 80, fontWeight: 500 }}>
+                            Step {step.stepOrder}
+                          </Typography>
+                          <Typography variant="body2" flex={1}>
+                            {step.approver
+                              ? step.approver.name ?? step.approver.email
+                              : step.persona}
+                          </Typography>
+                          <Chip label={step.status} size="small" />
+                          <IconButton
+                            size="small"
+                            color="error"
+                            
+                            onClick={() =>
+                              deleteStep.mutate({ stepId: step.id })
+                            }
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Box>
+                      </Collapse>
                     ))}
                   </Box>
                 ) : (
