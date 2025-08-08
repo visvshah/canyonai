@@ -2,12 +2,12 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { api, type RouterOutputs } from "~/trpc/react";
+import { api } from "~/trpc/react";
 import { format } from "date-fns";
 import { Box, Button, Chip, CircularProgress, Divider, IconButton, Paper, Table, TableBody, TableCell, TableContainer, TableRow, Typography } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import DeleteIcon from "@mui/icons-material/Delete";
-import type { Role } from "@prisma/client";
+import { Role, ApprovalStatus } from "@prisma/client";
 
 // dnd-kit
 import {
@@ -31,12 +31,12 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { alpha } from "@mui/material/styles";
 
-const roles = ["AE", "DEALDESK", "CRO", "LEGAL", "FINANCE"] as const;
+const roles = Object.values(Role) as readonly Role[];
 
 type Step = {
   id: string;
-  role: string;
-  status?: "Pending" | "Approved" | "Rejected";
+  role: Role;
+  status?: ApprovalStatus;
 };
 
 type ApprovalWorkflowBuilderProps = {
@@ -53,9 +53,9 @@ function SortableStepItem({ step, onDelete }: { step: Step; onDelete: (id: strin
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: step.id, disabled: step.status === "Approved" });
 
   const base =
-    step.status === "Approved"
+    step.status === ApprovalStatus.Approved
       ? "success"
-      : step.status === "Rejected"
+      : step.status === ApprovalStatus.Rejected
       ? "error"
       : "warning";
 
@@ -103,7 +103,7 @@ function SortableStepItem({ step, onDelete }: { step: Step; onDelete: (id: strin
             </Typography>
           ) : null}
         </Box>
-        {step.status !== "Approved" && (
+        {step.status !== ApprovalStatus.Approved && (
           <IconButton
             className="delete-btn"
             size="small"
@@ -209,7 +209,7 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
         if (overIndex >= 0) insertIndex = overIndex;
       }
       // Enforce rule: cannot insert before approved steps → clamp to after the last approved index
-      const lastApprovedIdx = steps.reduce((last, s, idx) => (s.status === "Approved" ? idx : last), -1);
+      const lastApprovedIdx = steps.reduce((last, s, idx) => (s.status === ApprovalStatus.Approved ? idx : last), -1);
       const minInsert = lastApprovedIdx + 1;
       if (insertIndex < minInsert) insertIndex = minInsert;
       insertAt(insertIndex, role);
@@ -227,14 +227,14 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
       if (idx !== -1) newIndex = idx;
     }
     // Enforce rule: cannot move a step before approved steps → clamp to after the last approved index
-    const lastApprovedIdx = steps.reduce((last, s, idx) => (s.status === "Approved" ? idx : last), -1);
+    const lastApprovedIdx = steps.reduce((last, s, idx) => (s.status === ApprovalStatus.Approved ? idx : last), -1);
     const minIndex = Math.min(steps.length - 1, lastApprovedIdx + 1);
     if (newIndex < minIndex) newIndex = minIndex;
     if (oldIndex !== newIndex) updateSteps(arrayMove(steps, oldIndex, newIndex));
   };
 
   const insertAt = (index: number, role: Step["role"]) => {
-    const newStep: Step = { id: crypto.randomUUID(), role, status: "Pending" };
+    const newStep: Step = { id: crypto.randomUUID(), role, status: ApprovalStatus.Pending };
     const next = [...steps.slice(0, index), newStep, ...steps.slice(index)];
     updateSteps(next);
   };
@@ -243,7 +243,7 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
     const idx = steps.findIndex((s) => s.id === id);
     if (idx === -1) return;
     // Enforce rule: cannot delete approved steps
-    if (steps[idx]!.status === "Approved") return;
+    if (steps[idx]!.status === ApprovalStatus.Approved) return;
     updateSteps(steps.filter((s) => s.id !== id));
   };
 
@@ -281,8 +281,6 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
   );
 }
 
-type Quote = RouterOutputs["quote"]["byId"];
-
 export default function QuoteDetailPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
@@ -301,13 +299,24 @@ export default function QuoteDetailPage() {
     if (!quote) return;
     const mapped: Step[] = (quote.approvalWorkflow?.steps ?? []).map((s) => ({
       id: s.id,
-      role: s.persona as string,
-      status: s.status as Step["status"],
+      role: s.persona as Role,
+      status: s.status as ApprovalStatus,
     }));
     setBuilderSteps(mapped);
   }, [quote]);
 
   const setWorkflowMutation = api.quote.setWorkflow.useMutation();
+
+  // Top-level save handler used by the builder component
+  const handleSaveWorkflow = async () => {
+    if (!quoteId) return;
+    const payload = builderSteps.map((s) => ({ persona: s.role, status: s.status }));
+    await setWorkflowMutation.mutateAsync({ quoteId, steps: payload });
+    await Promise.all([
+      utils.quote.byId.invalidate({ id: quoteId }),
+      utils.quote.all.invalidate(),
+    ]);
+  };
 
   const onBack = () => {
     if (typeof window !== "undefined" && window.history.length > 1) {
@@ -322,8 +331,8 @@ export default function QuoteDetailPage() {
     () =>
       (quote?.approvalWorkflow?.steps ?? []).map((s) => ({
         id: s.id,
-        role: s.persona as string,
-        status: s.status as Step["status"],
+        role: s.persona as Role,
+        status: s.status as ApprovalStatus,
       })),
     [quote],
   );
@@ -433,15 +442,7 @@ export default function QuoteDetailPage() {
           onChange={(s) => setBuilderSteps(s)}
           hasUnsaved={hasUnsaved}
           saving={setWorkflowMutation.isPending}
-          onSaveChanges={async () => {
-            if (!quoteId) return;
-            const payload = builderSteps.map((s) => ({ persona: s.role as Role, status: s.status as any }));
-            await setWorkflowMutation.mutateAsync({ quoteId, steps: payload });
-            await Promise.all([
-              utils.quote.byId.invalidate({ id: quoteId }),
-              utils.quote.all.invalidate(),
-            ]);
-          }}
+          onSaveChanges={handleSaveWorkflow}
         />
       </Box>
     </main>
