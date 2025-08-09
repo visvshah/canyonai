@@ -17,6 +17,7 @@ export const env = createEnv({
     DIRECT_URL: z.string(),
     GOOGLE_CLIENT_ID: z.string(),
     GOOGLE_CLIENT_SECRET: z.string(),
+    OPENAI_KEY: z.string(),
     NODE_ENV: z
       .enum(["development", "test", "production"])
       .default("development"),
@@ -43,6 +44,7 @@ export const env = createEnv({
     DIRECT_URL: process.env.DIRECT_URL,
     GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
+    OPENAI_KEY: process.env.OPENAI_KEY,
     NODE_ENV: process.env.NODE_ENV,
   },
   /**
