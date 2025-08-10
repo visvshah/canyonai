@@ -375,6 +375,10 @@ export default function QuoteDetailPage() {
                 </TableCell>
               </TableRow>
               <TableRow>
+                <TableCell>Quote ID</TableCell>
+                <TableCell>{quote.id}</TableCell>
+              </TableRow>
+              <TableRow>
                 <TableCell>Org</TableCell>
                 <TableCell>{quote.org.name}</TableCell>
               </TableRow>
@@ -408,23 +412,49 @@ export default function QuoteDetailPage() {
               )}
               <TableRow>
                 <TableCell>Subtotal</TableCell>
-                <TableCell>{quote.subtotal.toString()}</TableCell>
+                <TableCell>${Number(quote.subtotal as any).toFixed ? Number(quote.subtotal as any).toFixed(2) : (quote.subtotal as any).toString?.() ?? String(quote.subtotal)}</TableCell>
               </TableRow>
               <TableRow>
                 <TableCell>Discount %</TableCell>
-                <TableCell>{quote.discountPercent.toString()}</TableCell>
+                <TableCell>{Number(quote.discountPercent as any).toFixed ? Number(quote.discountPercent as any).toFixed(0) : (quote.discountPercent as any).toString?.() ?? String(quote.discountPercent)}</TableCell>
               </TableRow>
               <TableRow>
                 <TableCell>Total</TableCell>
-                <TableCell>{quote.total.toString()}</TableCell>
+                <TableCell>${Number(quote.total as any).toFixed ? Number(quote.total as any).toFixed(2) : (quote.total as any).toString?.() ?? String(quote.total)}</TableCell>
               </TableRow>
               <TableRow>
                 <TableCell>Package</TableCell>
-                <TableCell>{quote.package.name}</TableCell>
+                <TableCell>{(quote as any).package?.name}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>Seats</TableCell>
+                <TableCell>{(quote as any).seatCount ?? (quote as any).quantity ?? 1}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>Created By</TableCell>
+                <TableCell>{quote.createdBy?.name ?? quote.createdBy?.email ?? "—"}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>Add-ons</TableCell>
+                <TableCell>
+                  {(quote as any).addOns && (quote as any).addOns.length > 0 ? (
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                      {(quote as any).addOns.map((a: any) => (
+                        <Chip key={a.id} size="small" label={a.name as string} />
+                      ))}
+                    </Box>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">None</Typography>
+                  )}
+                </TableCell>
               </TableRow>
               <TableRow>
                 <TableCell>Created</TableCell>
                 <TableCell>{format(new Date(quote.createdAt), "MMM d, yyyy")}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>Updated</TableCell>
+                <TableCell>{format(new Date(quote.updatedAt), "MMM d, yyyy")}</TableCell>
               </TableRow>
             </TableBody>
           </Table>
@@ -445,6 +475,18 @@ export default function QuoteDetailPage() {
           onSaveChanges={handleSaveWorkflow}
         />
       </Box>
+
+      {quote.documentHtml ? (
+        <Box>
+          <Typography variant="subtitle1" gutterBottom>
+            Contract Preview
+          </Typography>
+          <Paper variant="outlined" sx={{ p: 1.5 }}>
+            {/* eslint-disable-next-line react/no-danger */}
+            <div dangerouslySetInnerHTML={{ __html: quote.documentHtml }} />
+          </Paper>
+        </Box>
+      ) : null}
     </main>
   );
 }
