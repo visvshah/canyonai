@@ -14,18 +14,7 @@ function getNextApproval(quote: Quote): string {
   const steps = quote.approvalWorkflow?.steps ?? [];
   const pendingStep = steps.find((s) => s.status === "Pending");
   if (!pendingStep) return "—";
-  if (pendingStep.approver) {
-    return pendingStep.approver.name ?? pendingStep.approver.email ?? "User";
-  }
-  // Fallback to persona role
   return pendingStep.persona;
-}
-
-function formatPaymentSummary(q: Quote): string {
-  const kind = q.paymentKind;
-  if (kind === "NET") return `NET ${q.netDays ?? "?"}d`;
-  if (kind === "PREPAY") return `PREPAY ${q.prepayPercent?.toString() ?? "100"}%`;
-  return `BOTH ${q.prepayPercent?.toString() ?? "?"}% + NET ${q.netDays ?? "?"}d`;
 }
 
 function formatCurrency(val: any): string {
@@ -73,7 +62,6 @@ export function QuotesTable() {
             <TableHead>
               <TableRow>
                 <TableCell>Customer</TableCell>
-                <TableCell>Org</TableCell>
                 <TableCell>Product</TableCell>
                 <TableCell>Status</TableCell>
                 <TableCell>Seats</TableCell>
@@ -92,14 +80,13 @@ export function QuotesTable() {
                   onClick={() => router.push(`/quotes/${q.id}`)}
                 >
                   <TableCell>{q.customerName}</TableCell>
-                  <TableCell>{q.org.name}</TableCell>
                   <TableCell>{q.package?.name}</TableCell>
                   <TableCell>
                     <Chip label={q.status} size="small" />
                   </TableCell>
                   <TableCell>{q.seatCount || q.quantity}</TableCell>
-                  <TableCell>{formatPaymentSummary(q)}</TableCell>
-                  <TableCell>{formatCurrency(q.total as any)}</TableCell>
+                  <TableCell>{q.paymentKind}</TableCell>
+                  <TableCell>{formatCurrency(q.total)}</TableCell>
                   <TableCell>{getNextApproval(q)}</TableCell>
                   <TableCell>
                     {format(new Date(q.createdAt), "MMM d, yyyy")}
