@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api } from "~/trpc/react";
 import { format } from "date-fns";
 import { Box, Button, Chip, CircularProgress, Divider, IconButton, Paper, Table, TableBody, TableCell, TableContainer, TableRow, Typography } from "@mui/material";
@@ -284,6 +284,7 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
 export default function QuoteDetailPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const quoteId = params?.id;
 
   const utils = api.useUtils();
@@ -306,6 +307,7 @@ export default function QuoteDetailPage() {
   }, [quote]);
 
   const setWorkflowMutation = api.quote.setWorkflow.useMutation();
+  const approveMutation = api.quote.approveNextForRole.useMutation();
 
   // Top-level save handler used by the builder component
   const handleSaveWorkflow = async () => {
@@ -318,7 +320,22 @@ export default function QuoteDetailPage() {
     ]);
   };
 
+  const handleApproveAs = async (role: Role) => {
+    if (!quoteId) return;
+    await approveMutation.mutateAsync({ quoteId, role });
+    await Promise.all([
+      utils.quote.byId.invalidate({ id: quoteId }),
+      utils.quote.all.invalidate(),
+    ]);
+  };
+
   const onBack = () => {
+    const from = searchParams?.get("from");
+    const role = searchParams?.get("role");
+    if (from === "home") {
+      router.push(role ? `/home?role=${encodeURIComponent(role)}` : "/home");
+      return;
+    }
     if (typeof window !== "undefined" && window.history.length > 1) {
       router.back();
     } else {
@@ -372,6 +389,23 @@ export default function QuoteDetailPage() {
                 <TableCell width={180}>Status</TableCell>
                 <TableCell>
                   <Chip label={quote.status} size="small" />
+                  {/* Quick-approve for next persona on detail page */}
+                  {quote.approvalWorkflow?.steps?.some((s) => s.status === "Pending") && (
+                    (() => {
+                      const next = quote.approvalWorkflow!.steps.find((s) => s.status === "Pending")!;
+                      return (
+                        <Button
+                          size="small"
+                          sx={{ ml: 1 }}
+                          variant="contained"
+                          onClick={() => handleApproveAs(next.persona as Role)}
+                          disabled={approveMutation.isPending}
+                        >
+                          Approve as {next.persona}
+                        </Button>
+                      );
+                    })()
+                  )}
                 </TableCell>
               </TableRow>
               <TableRow>

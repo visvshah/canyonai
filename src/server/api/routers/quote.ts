@@ -43,6 +43,37 @@ const updateQuoteStatus = async (
 
 export const quoteRouter = createTRPCRouter({
   /**
+   * Fetch quotes whose next pending step persona matches the provided role.
+   * "Next pending" is defined as the first step in order with status Pending.
+   */
+  pendingByRole: publicProcedure
+    .input(z.object({ role: z.nativeEnum(Role) }))
+    .query(async ({ ctx, input }) => {
+      const quotes = await ctx.db.quote.findMany({
+        where: { status: QuoteStatus.Pending },
+        include: {
+          org: true,
+          package: true,
+          approvalWorkflow: {
+            include: {
+              steps: {
+                include: { approver: true },
+                orderBy: { stepOrder: "asc" },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      return quotes.filter((q) => {
+        const steps = q.approvalWorkflow?.steps ?? [];
+        const firstPending = steps.find((s) => s.status === ApprovalStatus.Pending);
+        return firstPending?.persona === input.role;
+      });
+    }),
+
+  /**
    * Fetch all quotes. Optionally filter by a search string that matches the
    * customer name or organisation name (case-insensitive, partial match).
    */
@@ -117,6 +148,40 @@ export const quoteRouter = createTRPCRouter({
 
       if (!quote) throw new Error("Quote not found");
       return quote;
+    }),
+    
+  /**
+   * Approve the next pending step for a quote as a given role.
+   * Fails if the next pending step persona does not match the provided role.
+   */
+  approveNextForRole: publicProcedure
+    .input(z.object({ quoteId: z.string(), role: z.nativeEnum(Role) }))
+    .mutation(async ({ ctx, input }) => {
+      const { quoteId, role } = input;
+      return ctx.db.$transaction(async (tx) => {
+        const workflow = await tx.approvalWorkflow.findUnique({
+          where: { quoteId },
+          include: { steps: { orderBy: { stepOrder: "asc" } } },
+        });
+        if (!workflow) {
+          throw new Error("Approval workflow not found for quote");
+        }
+        const nextPending = workflow.steps.find((s) => s.status === ApprovalStatus.Pending);
+        if (!nextPending) {
+          throw new Error("No pending approval step for this quote");
+        }
+        if (nextPending.persona !== role) {
+          throw new Error("Next pending step does not match the selected role");
+        }
+
+        await tx.approvalStep.update({
+          where: { id: nextPending.id },
+          data: { status: ApprovalStatus.Approved, approvedAt: new Date() },
+        });
+
+        const newStatus = await updateQuoteStatus(tx, quoteId);
+        return { success: true, newStatus } as const;
+      });
     }),
     
   /**

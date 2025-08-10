@@ -16,9 +16,11 @@ import {
 import ListAltIcon from "@mui/icons-material/ListAlt";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 import InsightsIcon from "@mui/icons-material/Insights";
+import HomeIcon from "@mui/icons-material/Home";
 import { usePathname } from "next/navigation";
 
 const NAV_ITEMS = [
+  { name: "Home", href: "/home", icon: HomeIcon },
   { name: "Quotes", href: "/quotes", icon: ListAltIcon },
   { name: "Create Quote", href: "/create-quote", icon: AddCircleOutlineIcon },
   { name: "Insights", href: "/insights", icon: InsightsIcon },
