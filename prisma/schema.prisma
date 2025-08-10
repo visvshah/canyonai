@@ -78,17 +78,16 @@ enum PaymentKind {
 }
 
 enum QuoteStatus {
-    Draft
     Pending
     Approved
     Rejected
+    Sold
 }
 
 enum ApprovalStatus {
     Pending
     Approved
     Rejected
-    Skipped
 }
 
 model Org {
@@ -98,6 +97,7 @@ model Org {
 
     users      User[]
     packages   Package[]
+    addOns     AddOn[]
     quotes     Quote[]
 }
 
@@ -107,8 +107,22 @@ model Package {
     org         Org     @relation(fields: [orgId], references: [id])
     name        String
     description String
+    unitPrice   Decimal @default(0)
 
     quotes      Quote[]
+}
+
+model AddOn {
+    id          String  @id @default(uuid())
+    orgId       String
+    org         Org     @relation(fields: [orgId], references: [id])
+    name        String
+    description String?
+    unitPrice   Decimal @default(0)
+
+    quotes      Quote[]
+
+    @@unique([orgId, name])
 }
 
 model Quote {
@@ -120,6 +134,8 @@ model Quote {
     packageId       String
     package         Package       @relation(fields: [packageId], references: [id])
     quantity        Int
+    seatCount       Int           @default(0)
+    addOns          AddOn[]
     customerName    String
     paymentKind     PaymentKind
     netDays         Int?
@@ -127,7 +143,8 @@ model Quote {
     subtotal        Decimal
     discountPercent Decimal
     total           Decimal
-    status          QuoteStatus   @default(Draft)
+    documentHtml    String?       @db.Text
+    status          QuoteStatus   @default(Pending)
     createdAt       DateTime      @default(now())
     updatedAt       DateTime      @updatedAt
 
@@ -152,4 +169,6 @@ model ApprovalStep {
     approver    User?           @relation("UserApprovalSteps", fields: [approverId], references: [id])
     status      ApprovalStatus  @default(Pending)
     approvedAt  DateTime?
+    createdAd   DateTime        @default(now())
+    updatedAd   DateTime        @updatedAt
 }
