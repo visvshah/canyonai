@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api } from "~/trpc/react";
-import { format } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import { Box, Button, Chip, CircularProgress, Divider, IconButton, Paper, Table, TableBody, TableCell, TableContainer, TableRow, Typography } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import DeleteIcon from "@mui/icons-material/Delete";
@@ -49,7 +49,7 @@ type ApprovalWorkflowBuilderProps = {
 
 // no DragHandle: whole tile is draggable
 
-function SortableStepItem({ step, onDelete }: { step: Step; onDelete: (id: string) => void }) {
+function SortableStepItem({ step, onDelete, stepIndex }: { step: Step; onDelete: (id: string) => void; stepIndex?: number }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: step.id, disabled: step.status === "Approved" });
 
   const base =
@@ -75,10 +75,10 @@ function SortableStepItem({ step, onDelete }: { step: Step; onDelete: (id: strin
         variant="outlined"
         sx={{
           position: "relative",
-          px: 1.25,
-          py: 1,
-          minWidth: 120,
-          borderRadius: 1.5,
+          px: 1.5,
+          py: 1.25,
+          minWidth: 140,
+          borderRadius: 1,
           borderColor: border,
           backgroundImage: bg,
           color: textColor,
@@ -88,12 +88,18 @@ function SortableStepItem({ step, onDelete }: { step: Step; onDelete: (id: strin
           gap: 1,
           boxShadow: isDragging ? 2 : 0,
           cursor: "grab",
+          clipPath: "polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%)",
           "&:hover .delete-btn": { opacity: 1 },
         }}
         {...attributes}
         {...listeners}
       >
         <Box sx={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+          {typeof stepIndex === "number" && (
+            <Typography variant="caption" sx={{ opacity: 0.7, mb: 0.25 }}>
+              Step {stepIndex}
+            </Typography>
+          )}
           <Typography variant="body2" sx={{ fontWeight: 600, textTransform: "uppercase" }} noWrap>
             {step.role}
           </Typography>
@@ -140,16 +146,17 @@ function DraggableRoleTile({ role }: { role: Step["role"] }) {
         {...attributes}
         {...listeners}
         sx={{
-          px: 1.25,
-          py: 1,
-          minWidth: 110,
-          borderRadius: 1.5,
-          backgroundColor: (t) => alpha(t.palette.grey[200], 0.5),
+          px: 1.5,
+          py: 1.1,
+          minWidth: 130,
+          borderRadius: 1,
+          backgroundColor: (t) => alpha(t.palette.grey[200], 0.65),
           borderColor: (t) => alpha(t.palette.grey[400], 0.7),
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           cursor: "grab",
+          clipPath: "polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%)",
         }}
       >
         <Typography variant="body2" sx={{ fontWeight: 600 }}>
@@ -264,8 +271,8 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
         <SortableContext items={steps.map((s) => s.id)} strategy={horizontalListSortingStrategy}>
           <WorkflowDroppableContainer>
             <Box component="ol" sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
-              {steps.map((step) => (
-                <SortableStepItem key={step.id} step={step} onDelete={handleDelete} />
+              {steps.map((step, i) => (
+                <SortableStepItem key={step.id} step={step} onDelete={handleDelete} stepIndex={i + 1} />
               ))}
             </Box>
           </WorkflowDroppableContainer>
@@ -367,6 +374,25 @@ export default function QuoteDetailPage() {
     );
   }
 
+  // Derived pricing numbers for clear equation
+  const seats = (quote as any).seatCount ?? (quote as any).quantity ?? 1;
+  const packageUnit = Number(((quote as any).package?.unitPrice as any) ?? 0);
+  const addOnSum = ((quote as any).addOns ?? []).reduce(
+    (acc: number, a: any) => acc + Number((a.unitPrice as any) ?? 0),
+    0,
+  );
+  const packageExtended = packageUnit * seats;
+  const subtotalNum = Number(quote.subtotal as any ?? 0) || packageExtended + addOnSum; // prefer server subtotal
+  const discountPct = Number(quote.discountPercent as any ?? 0);
+  const discountValue = (subtotalNum * discountPct) / 100;
+  const totalNum = Number(quote.total as any ?? subtotalNum - discountValue);
+
+  // Next pending step and duration
+  const nextPending = quote.approvalWorkflow?.steps?.find((s) => s.status === "Pending");
+  const pendingSince = nextPending?.updatedAd ?? nextPending?.createdAd ?? quote.createdAt;
+
+  const fmt = (n: number) => n.toLocaleString(undefined, { style: "currency", currency: "USD" });
+
   return (
     <main className="flex min-h-screen flex-col gap-6 p-6">
       <Box display="flex" alignItems="center" gap={2}>
@@ -378,128 +404,156 @@ export default function QuoteDetailPage() {
         </Typography>
       </Box>
 
-      <Box>
-        <Typography variant="subtitle1" gutterBottom>
-          Quote Details
-        </Typography>
-        <TableContainer component={Paper} variant="outlined" sx={{ mb: 1 }}>
-          <Table size="small" aria-label="quote details">
-            <TableBody>
-              <TableRow>
-                <TableCell width={180}>Status</TableCell>
-                <TableCell>
-                  <Chip label={quote.status} size="small" />
-                  {/* Quick-approve for next persona on detail page */}
-                  {quote.approvalWorkflow?.steps?.some((s) => s.status === "Pending") && (
-                    (() => {
-                      const next = quote.approvalWorkflow!.steps.find((s) => s.status === "Pending")!;
-                      return (
-                        <Button
-                          size="small"
-                          sx={{ ml: 1 }}
-                          variant="contained"
-                          onClick={() => handleApproveAs(next.persona as Role)}
-                          disabled={approveMutation.isPending}
-                        >
-                          Approve as {next.persona}
-                        </Button>
-                      );
-                    })()
-                  )}
-                </TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Quote ID</TableCell>
-                <TableCell>{quote.id}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Org</TableCell>
-                <TableCell>{quote.org.name}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Payment Kind</TableCell>
-                <TableCell>{quote.paymentKind}</TableCell>
-              </TableRow>
-              {quote.paymentKind === "NET" && (
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.2fr 1fr' }, gap: 2 }}>
+        <Box>
+          <Paper variant="outlined" sx={{ p: 1.5 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              Details
+            </Typography>
+            <Table size="small" aria-label="quote details">
+              <TableBody>
                 <TableRow>
-                  <TableCell>Net Days</TableCell>
-                  <TableCell>{quote.netDays}</TableCell>
+                  <TableCell width={180}>Status</TableCell>
+                  <TableCell>
+                    <Chip label={quote.status} size="small" />
+                    {nextPending ? (
+                      <Button
+                        size="small"
+                        sx={{ ml: 1 }}
+                        variant="contained"
+                        onClick={() => handleApproveAs(nextPending.persona as Role)}
+                        disabled={approveMutation.isPending}
+                      >
+                        Approve as {nextPending.persona}
+                      </Button>
+                    ) : null}
+                  </TableCell>
                 </TableRow>
-              )}
-              {quote.paymentKind === "PREPAY" && (
                 <TableRow>
-                  <TableCell>Prepay %</TableCell>
-                  <TableCell>{quote.prepayPercent?.toString()}</TableCell>
+                  <TableCell>Org</TableCell>
+                  <TableCell>{quote.org.name}</TableCell>
                 </TableRow>
-              )}
-              {quote.paymentKind === "BOTH" && (
-                <>
+                <TableRow>
+                  <TableCell>Package</TableCell>
+                  <TableCell>
+                    <Box>
+                      <Typography variant="body2" fontWeight={600}>
+                        {(quote as any).package?.name}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {(quote as any).package?.description}
+                      </Typography>
+                    </Box>
+                  </TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Add-ons</TableCell>
+                  <TableCell>
+                    {(quote as any).addOns && (quote as any).addOns.length > 0 ? (
+                      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                        {(quote as any).addOns.map((a: any) => (
+                          <Chip key={a.id} size="small" label={a.name as string} />
+                        ))}
+                      </Box>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        None
+                      </Typography>
+                    )}
+                  </TableCell>
+                </TableRow>
+                {nextPending ? (
+                  <TableRow>
+                    <TableCell>Next Approval</TableCell>
+                    <TableCell>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                        <Chip label={(nextPending.persona as string) ?? "—"} size="small" />
+                        <Typography variant="body2" color="text.secondary">
+                          Pending {formatDistanceToNow(new Date(pendingSince as any), { addSuffix: true })}
+                        </Typography>
+                      </Box>
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+                <TableRow>
+                  <TableCell>Created By</TableCell>
+                  <TableCell>{quote.createdBy?.name ?? quote.createdBy?.email ?? "—"}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Quote ID</TableCell>
+                  <TableCell>{quote.id}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Created</TableCell>
+                  <TableCell>{format(new Date(quote.createdAt), "MMM d, yyyy")}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Last Updated</TableCell>
+                  <TableCell>{format(new Date(quote.updatedAt), "MMM d, yyyy")}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </Paper>
+        </Box>
+
+        <Box>
+          <Paper variant="outlined" sx={{ p: 1.5 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              Financials
+            </Typography>
+            <Box sx={{ display: "grid", rowGap: 0.75 }}>
+              <Typography variant="body2">
+                Package {((quote as any).package?.name as string) ?? ""} @ <b>{fmt(packageUnit)}</b> × <b>{seats}</b> = <b>{fmt(packageExtended)}</b>
+              </Typography>
+              <Typography variant="body2">
+                Add-ons total = <b>{fmt(addOnSum)}</b>
+              </Typography>
+              <Divider sx={{ my: 0.5 }} />
+              <Typography variant="body2">
+                Subtotal = <b>{fmt(subtotalNum)}</b>
+              </Typography>
+              <Typography variant="body2">
+                Discount {discountPct}% = <b>-{fmt(discountValue)}</b>
+              </Typography>
+              <Divider sx={{ my: 0.5 }} />
+              <Typography variant="body1" fontWeight={700}>
+                Total = {fmt(totalNum)}
+              </Typography>
+            </Box>
+
+            <Divider sx={{ my: 1.5 }} />
+            <Typography variant="subtitle2" gutterBottom>
+              Payment Terms
+            </Typography>
+            <Table size="small" aria-label="payment terms">
+              <TableBody>
+                <TableRow>
+                  <TableCell width={140}>Payment Kind</TableCell>
+                  <TableCell>{quote.paymentKind}</TableCell>
+                </TableRow>
+                {quote.paymentKind === "NET" || quote.paymentKind === "BOTH" ? (
                   <TableRow>
                     <TableCell>Net Days</TableCell>
-                    <TableCell>{quote.netDays}</TableCell>
+                    <TableCell>{quote.netDays ?? "—"}</TableCell>
                   </TableRow>
+                ) : null}
+                {quote.paymentKind === "PREPAY" || quote.paymentKind === "BOTH" ? (
                   <TableRow>
                     <TableCell>Prepay %</TableCell>
-                    <TableCell>{quote.prepayPercent?.toString()}</TableCell>
+                    <TableCell>{(quote.prepayPercent as any)?.toString?.() ?? String(quote.prepayPercent ?? "—")}</TableCell>
                   </TableRow>
-                </>
-              )}
-              <TableRow>
-                <TableCell>Subtotal</TableCell>
-                <TableCell>${Number(quote.subtotal as any).toFixed ? Number(quote.subtotal as any).toFixed(2) : (quote.subtotal as any).toString?.() ?? String(quote.subtotal)}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Discount %</TableCell>
-                <TableCell>{Number(quote.discountPercent as any).toFixed ? Number(quote.discountPercent as any).toFixed(0) : (quote.discountPercent as any).toString?.() ?? String(quote.discountPercent)}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Total</TableCell>
-                <TableCell>${Number(quote.total as any).toFixed ? Number(quote.total as any).toFixed(2) : (quote.total as any).toString?.() ?? String(quote.total)}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Package</TableCell>
-                <TableCell>{(quote as any).package?.name}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Seats</TableCell>
-                <TableCell>{(quote as any).seatCount ?? (quote as any).quantity ?? 1}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Created By</TableCell>
-                <TableCell>{quote.createdBy?.name ?? quote.createdBy?.email ?? "—"}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Add-ons</TableCell>
-                <TableCell>
-                  {(quote as any).addOns && (quote as any).addOns.length > 0 ? (
-                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                      {(quote as any).addOns.map((a: any) => (
-                        <Chip key={a.id} size="small" label={a.name as string} />
-                      ))}
-                    </Box>
-                  ) : (
-                    <Typography variant="body2" color="text.secondary">None</Typography>
-                  )}
-                </TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Created</TableCell>
-                <TableCell>{format(new Date(quote.createdAt), "MMM d, yyyy")}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Updated</TableCell>
-                <TableCell>{format(new Date(quote.updatedAt), "MMM d, yyyy")}</TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
-        </TableContainer>
+                ) : null}
+              </TableBody>
+            </Table>
+          </Paper>
+        </Box>
       </Box>
 
       <Divider sx={{ my: 2 }} />
 
       <Box>
         <Typography variant="subtitle1" gutterBottom>
-          Workflow Editor
+          Approval Workflow
         </Typography>
         <ApprovalWorkflowBuilder
           value={builderSteps}
