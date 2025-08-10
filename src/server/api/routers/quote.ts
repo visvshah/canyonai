@@ -41,7 +41,54 @@ const updateQuoteStatus = async (
   return newStatus;
 };
 
+// Promote exactly the first non-approved step to Pending and demote others to Waiting.
+const recomputeWorkflowGating = async (
+  tx: Prisma.TransactionClient,
+  quoteId: string,
+) => {
+  const workflow = await tx.approvalWorkflow.findUnique({
+    where: { quoteId },
+    include: { steps: { orderBy: { stepOrder: "asc" } } },
+  });
+  if (!workflow) return;
+  const steps = workflow.steps;
+  if (steps.length === 0) return;
+  if (steps.some((s) => s.status === ApprovalStatus.Rejected)) return;
+  const firstNonApprovedIndex = steps.findIndex((s) => s.status !== ApprovalStatus.Approved);
+  if (firstNonApprovedIndex === -1) return;
+  const now = new Date();
+  for (let i = 0; i < steps.length; i++) {
+    const st = steps[i]!;
+    if (st.status === ApprovalStatus.Approved) continue;
+    const desired = i === firstNonApprovedIndex ? ApprovalStatus.Pending : ApprovalStatus.Waiting;
+    if (st.status !== desired) {
+      if (desired === ApprovalStatus.Pending) {
+        await tx.approvalStep.update({ where: { id: st.id }, data: { status: desired, updatedAt: now } });
+      } else {
+        await tx.approvalStep.update({ where: { id: st.id }, data: { status: desired, updatedAt: null } });
+      }
+    } else if (desired === ApprovalStatus.Pending && !st.updatedAt) {
+      await tx.approvalStep.update({ where: { id: st.id }, data: { updatedAt: now } });
+    }
+  }
+};
+
 export const quoteRouter = createTRPCRouter({
+  catalog: publicProcedure.query(async ({ ctx }) => {
+    const sessionUserId = ctx.session?.user?.id ?? null;
+    let orgId: string | undefined;
+    if (sessionUserId) {
+      orgId = (await ctx.db.user.findUnique({ where: { id: sessionUserId }, select: { orgId: true } }))?.orgId ?? undefined;
+    }
+    if (!orgId) {
+      orgId = (await ctx.db.org.findFirst({ select: { id: true } }))?.id;
+    }
+    const [packages, addOns] = await Promise.all([
+      ctx.db.package.findMany({ where: orgId ? { orgId } : undefined, select: { id: true, name: true } , orderBy: { name: "asc" } }),
+      ctx.db.addOn.findMany({ where: orgId ? { orgId } : undefined, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    ]);
+    return { packages, addOns } as const;
+  }),
   /**
    * Fetch quotes whose next pending step persona matches the provided role.
    * "Next pending" is defined as the first step in order with status Pending.
@@ -179,6 +226,8 @@ export const quoteRouter = createTRPCRouter({
           data: { status: ApprovalStatus.Approved, approvedAt: new Date() },
         });
 
+        // Promote the next waiting step and set its updatedAt
+        await recomputeWorkflowGating(tx, quoteId);
         const newStatus = await updateQuoteStatus(tx, quoteId);
         return { success: true, newStatus } as const;
       });
@@ -219,6 +268,7 @@ export const quoteRouter = createTRPCRouter({
         await tx.approvalStep.deleteMany({ where: { approvalWorkflowId: workflowId } });
 
         // Insert new steps in order
+        const now = new Date();
         for (let i = 0; i < steps.length; i++) {
           const s = steps[i]!;
           let approverId: string | null = null;
@@ -232,12 +282,14 @@ export const quoteRouter = createTRPCRouter({
               stepOrder: i + 1,
               persona: s.persona,
               approverId,
-              status: s.status ?? ApprovalStatus.Pending,
+              status: s.status ?? ApprovalStatus.Waiting,
+              updatedAt: s.status === ApprovalStatus.Pending ? now : null,
             },
           });
         }
 
-        // Update quote status based on new workflow
+        // Enforce gating and update quote status based on new workflow
+        await recomputeWorkflowGating(tx, quoteId);
         await updateQuoteStatus(tx, quoteId);
       });
       return { success: true };
@@ -259,14 +311,12 @@ export const quoteRouter = createTRPCRouter({
           addOnIds: z.array(z.string()).optional().default([]),
           addOnNames: z.array(z.string()).optional().default([]),
           paymentKind: z.nativeEnum(PaymentKind).optional(),
-          recentDays: z.number().int().min(1).max(3650).default(365),
-          limit: z.number().int().min(1).max(50).default(10),
         })
         .default({}),
     )
     .query(async ({ ctx, input }) => {
       const params = input;
-      const recentThreshold = new Date(Date.now() - (params.recentDays ?? 365) * 24 * 60 * 60 * 1000);
+      const recentThreshold = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
 
       const candidates = await ctx.db.quote.findMany({
         where: {
@@ -366,7 +416,7 @@ export const quoteRouter = createTRPCRouter({
       const ranked = scored
         .filter((s) => s.score > 0)
         .sort((a, b) => (b.score - a.score) || (b.q.createdAt.getTime() - a.q.createdAt.getTime()))
-        .slice(0, params.limit ?? 10)
+        .slice(0, 20)
         .map(({ q, score, reasons }) => ({
           quoteId: q.id,
           createdAt: q.createdAt,
@@ -602,7 +652,7 @@ export const quoteRouter = createTRPCRouter({
           },
         });
 
-        // Remaining steps pending
+        // Remaining steps initially Waiting; gating will set first to Pending and timestamp it
         let order = 2;
         for (const persona of chain.slice(1)) {
           await tx.approvalStep.create({
@@ -610,13 +660,13 @@ export const quoteRouter = createTRPCRouter({
               approvalWorkflowId: workflowId,
               stepOrder: order,
               persona,
-              status: ApprovalStatus.Pending,
+              status: ApprovalStatus.Waiting,
             },
           });
           order += 1;
         }
 
-        // Recompute the quote status from its steps
+        await recomputeWorkflowGating(tx, quote.id);
         await updateQuoteStatus(tx, quote.id);
       });
 

@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api } from "~/trpc/react";
 import { format, formatDistanceToNow } from "date-fns";
-import { Box, Button, Chip, CircularProgress, Divider, IconButton, Paper, Table, TableBody, TableCell, TableContainer, TableRow, Typography } from "@mui/material";
+import { Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton, Paper, Table, TableBody, TableCell, TableContainer, TableRow, Typography } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import DeleteIcon from "@mui/icons-material/Delete";
 import { Role, ApprovalStatus } from "@prisma/client";
@@ -45,6 +45,7 @@ type ApprovalWorkflowBuilderProps = {
   hasUnsaved?: boolean;
   onSaveChanges?: () => void | Promise<void>;
   saving?: boolean;
+  showSaveButton?: boolean;
 };
 
 // no DragHandle: whole tile is draggable
@@ -57,7 +58,9 @@ function SortableStepItem({ step, onDelete, stepIndex }: { step: Step; onDelete:
       ? "success"
       : step.status === ApprovalStatus.Rejected
       ? "error"
-      : "warning";
+      : step.status === ApprovalStatus.Pending
+      ? "warning"
+      : "info";
 
   const bg = (theme: any) =>
     `linear-gradient(135deg, ${alpha(theme.palette[base].main, 0.18)} 0%, ${alpha(theme.palette[base].main, 0.1)} 100%)`;
@@ -182,7 +185,58 @@ function WorkflowDroppableContainer({ children }: { children: React.ReactNode })
   );
 }
 
-function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, saving }: ApprovalWorkflowBuilderProps) {
+// Read-only renderer for workflow steps
+function ReadOnlyStepItem({ step, stepIndex }: { step: Step; stepIndex: number }) {
+  const base =
+    step.status === ApprovalStatus.Approved
+      ? "success"
+      : step.status === ApprovalStatus.Rejected
+      ? "error"
+      : step.status === ApprovalStatus.Pending
+      ? "warning"
+      : "info";
+
+  const bg = (theme: any) =>
+    `linear-gradient(135deg, ${alpha(theme.palette[base].main, 0.18)} 0%, ${alpha(theme.palette[base].main, 0.1)} 100%)`;
+  const border = (theme: any) => alpha(theme.palette[base].main, 0.35);
+  const textColor = (theme: any) => theme.palette.text.primary;
+
+  return (
+    <Paper
+      variant="outlined"
+      sx={{
+        px: 1.5,
+        py: 1.25,
+        minWidth: 140,
+        borderRadius: 1,
+        borderColor: border,
+        backgroundImage: bg,
+        color: textColor,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 1,
+        clipPath: "polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%)",
+      }}
+    >
+      <Box sx={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <Typography variant="caption" sx={{ opacity: 0.7, mb: 0.25 }}>
+          Step {stepIndex}
+        </Typography>
+        <Typography variant="body2" sx={{ fontWeight: 600, textTransform: "uppercase" }} noWrap>
+          {step.role}
+        </Typography>
+        {step.status ? (
+          <Typography variant="caption" sx={{ opacity: 0.8 }}>
+            {step.status.toLowerCase()}
+          </Typography>
+        ) : null}
+      </Box>
+    </Paper>
+  );
+}
+
+function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, saving, showSaveButton = true }: ApprovalWorkflowBuilderProps) {
   const [steps, setSteps] = useState<Step[]>(value ?? []);
 
   useEffect(() => {
@@ -237,13 +291,16 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
     const lastApprovedIdx = steps.reduce((last, s, idx) => (s.status === ApprovalStatus.Approved ? idx : last), -1);
     const minIndex = Math.min(steps.length - 1, lastApprovedIdx + 1);
     if (newIndex < minIndex) newIndex = minIndex;
-    if (oldIndex !== newIndex) updateSteps(arrayMove(steps, oldIndex, newIndex));
+    if (oldIndex !== newIndex) {
+      const next = arrayMove(steps, oldIndex, newIndex);
+      updateSteps(applyGating(next));
+    }
   };
 
   const insertAt = (index: number, role: Step["role"]) => {
-    const newStep: Step = { id: crypto.randomUUID(), role, status: ApprovalStatus.Pending };
+    const newStep: Step = { id: crypto.randomUUID(), role, status: ApprovalStatus.Waiting };
     const next = [...steps.slice(0, index), newStep, ...steps.slice(index)];
-    updateSteps(next);
+    updateSteps(applyGating(next));
   };
 
   const handleDelete = (id: string) => {
@@ -251,7 +308,23 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
     if (idx === -1) return;
     // Enforce rule: cannot delete approved steps
     if (steps[idx]!.status === ApprovalStatus.Approved) return;
-    updateSteps(steps.filter((s) => s.id !== id));
+    const next = steps.filter((s) => s.id !== id);
+    updateSteps(applyGating(next));
+  };
+
+  // Gating: promote only the first non-approved step to Pending; others Waiting
+  const applyGating = (list: Step[]): Step[] => {
+    const out = list.map((s) => ({ ...s }));
+    const hasRejected = out.some((s) => s.status === ApprovalStatus.Rejected);
+    if (hasRejected) return out;
+    const firstNonApprovedIndex = out.findIndex((s) => s.status !== ApprovalStatus.Approved);
+    if (firstNonApprovedIndex === -1) return out;
+    for (let i = 0; i < out.length; i++) {
+      const st = out[i]!;
+      if (st.status === ApprovalStatus.Approved) continue;
+      st.status = i === firstNonApprovedIndex ? ApprovalStatus.Pending : ApprovalStatus.Waiting;
+    }
+    return out;
   };
 
   return (
@@ -278,11 +351,13 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
           </WorkflowDroppableContainer>
         </SortableContext>
 
-        <Box sx={{ mt: 1.5 }}>
-          <Button variant="contained" disabled={!hasUnsaved || saving} onClick={() => onSaveChanges?.()}>
-            {saving ? "Saving..." : "Save changes"}
-          </Button>
-        </Box>
+        {showSaveButton ? (
+          <Box sx={{ mt: 1.5 }}>
+            <Button variant="contained" disabled={!hasUnsaved || saving} onClick={() => onSaveChanges?.()}>
+              {saving ? "Saving..." : "Save changes"}
+            </Button>
+          </Box>
+        ) : null}
       </Box>
     </DndContext>
   );
@@ -300,8 +375,11 @@ export default function QuoteDetailPage() {
     { enabled: !!quoteId, staleTime: 0 },
   );
 
-  // Local builder state derived from server data
-  const [builderSteps, setBuilderSteps] = useState<Step[]>([]);
+  // Read-only display steps and draft steps for modal editing
+  const [displaySteps, setDisplaySteps] = useState<Step[]>([]);
+  const [draftSteps, setDraftSteps] = useState<Step[]>([]);
+
+  const [editorOpen, setEditorOpen] = useState(false);
 
   useEffect(() => {
     if (!quote) return;
@@ -310,8 +388,9 @@ export default function QuoteDetailPage() {
       role: s.persona as Role,
       status: s.status as ApprovalStatus,
     }));
-    setBuilderSteps(mapped);
-  }, [quote]);
+    setDisplaySteps(mapped);
+    if (!editorOpen) setDraftSteps(mapped);
+  }, [quote, editorOpen]);
 
   const setWorkflowMutation = api.quote.setWorkflow.useMutation();
   const approveMutation = api.quote.approveNextForRole.useMutation();
@@ -319,12 +398,14 @@ export default function QuoteDetailPage() {
   // Top-level save handler used by the builder component
   const handleSaveWorkflow = async () => {
     if (!quoteId) return;
-    const payload = builderSteps.map((s) => ({ persona: s.role, status: s.status }));
+    const payload = draftSteps.map((s) => ({ persona: s.role, status: s.status }));
     await setWorkflowMutation.mutateAsync({ quoteId, steps: payload });
     await Promise.all([
       utils.quote.byId.invalidate({ id: quoteId }),
       utils.quote.all.invalidate(),
     ]);
+    setDisplaySteps(draftSteps);
+    setEditorOpen(false);
   };
 
   const handleApproveAs = async (role: Role) => {
@@ -350,20 +431,10 @@ export default function QuoteDetailPage() {
     }
   };
 
-  // Compute current server steps for unsaved-change comparison
-  const serverStepsForCompare = useMemo(
-    () =>
-      (quote?.approvalWorkflow?.steps ?? []).map((s) => ({
-        id: s.id,
-        role: s.persona as Role,
-        status: s.status as ApprovalStatus,
-      })),
-    [quote],
-  );
-
-  const hasUnsaved = useMemo(
-    () => JSON.stringify(builderSteps) !== JSON.stringify(serverStepsForCompare),
-    [builderSteps, serverStepsForCompare],
+  // Unsaved comparison: modal draft vs currently displayed
+  const hasDraftUnsaved = useMemo(
+    () => JSON.stringify(draftSteps) !== JSON.stringify(displaySteps),
+    [draftSteps, displaySteps],
   );
 
   if (isLoading || !quote) {
@@ -389,7 +460,7 @@ export default function QuoteDetailPage() {
 
   // Next pending step and duration
   const nextPending = quote.approvalWorkflow?.steps?.find((s) => s.status === "Pending");
-  const pendingSince = nextPending?.updatedAd ?? nextPending?.createdAd ?? quote.createdAt;
+  const pendingSince = nextPending?.updatedAt ?? nextPending?.createdAt ?? quote.createdAt;
 
   const fmt = (n: number) => n.toLocaleString(undefined, { style: "currency", currency: "USD" });
 
@@ -552,17 +623,57 @@ export default function QuoteDetailPage() {
       <Divider sx={{ my: 2 }} />
 
       <Box>
-        <Typography variant="subtitle1" gutterBottom>
-          Approval Workflow
-        </Typography>
-        <ApprovalWorkflowBuilder
-          value={builderSteps}
-          onChange={(s) => setBuilderSteps(s)}
-          hasUnsaved={hasUnsaved}
-          saving={setWorkflowMutation.isPending}
-          onSaveChanges={handleSaveWorkflow}
-        />
+        <Typography variant="subtitle1" gutterBottom>Approval Workflow</Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+          {displaySteps.length > 0 ? (
+            displaySteps.map((s, i) => (
+              <ReadOnlyStepItem key={s.id} step={s} stepIndex={i + 1} />
+            ))
+          ) : (
+            <Typography variant="body2" color="text.secondary">No steps</Typography>
+          )}
+        </Box>
+        <Box sx={{ mt: 1.5 }}>
+          <Button variant="outlined" onClick={() => setEditorOpen(true)}>Edit Workflow</Button>
+        </Box>
       </Box>
+
+      <Dialog
+        fullWidth
+        maxWidth="md"
+        open={editorOpen}
+        onClose={() => {
+          // reset drafts when closing without save
+          setDraftSteps(displaySteps);
+          setEditorOpen(false);
+        }}
+      >
+        <DialogTitle>Edit Approval Workflow</DialogTitle>
+        <DialogContent dividers>
+          <ApprovalWorkflowBuilder
+            value={draftSteps}
+            onChange={(s) => setDraftSteps(s)}
+            hasUnsaved={hasDraftUnsaved}
+            saving={setWorkflowMutation.isPending}
+            onSaveChanges={handleSaveWorkflow}
+            showSaveButton={false}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setDraftSteps(displaySteps);
+              setEditorOpen(false);
+            }}
+            disabled={setWorkflowMutation.isPending}
+          >
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={handleSaveWorkflow} disabled={!hasDraftUnsaved || setWorkflowMutation.isPending}>
+            {setWorkflowMutation.isPending ? 'Saving...' : 'Save changes'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {quote.documentHtml ? (
         <Box>

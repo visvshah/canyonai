@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, Chip, CircularProgress, Divider, IconButton, Paper, Tab, Tabs, TextField, Typography } from "@mui/material";
 import SendIcon from "@mui/icons-material/Send";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import { useRouter } from "next/navigation";
+import { api } from "~/trpc/react";
 import { format } from "date-fns";
 
 type ChatRole = "assistant" | "user";
@@ -62,24 +63,44 @@ export default function CreateQuotePage() {
   const [findResults, setFindResults] = useState<FindResultItem[]>([]);
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  // No persistence; back navigation will reset chat
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, hasStoppedChat]);
 
+  // No storage key; we no longer persist chat/results
+
+  const { data: catalog } = api.quote.catalog.useQuery(undefined, { staleTime: 60_000 });
+
+  const friendlyGreeting = useMemo(() => {
+    const pkgList = (catalog?.packages ?? []).slice(0, 10).map((p) => `${p.name}`).join("\n- ");
+    const addOnList = (catalog?.addOns ?? []).slice(0, 10).map((a) => `${a.name}`).join("\n- ");
+    if (mode === "find") {
+      return [
+        "Hey! I can help you find quotes. Specify a package or add-ons to get started.",
+        pkgList ? `\nAvailable packages:\n- ${pkgList}` : "",
+        addOnList ? `\nAvailable add-ons:\n- ${addOnList}` : "",
+      ].filter(Boolean).join("\n");
+    }
+    return "Tell me the quote details and I’ll create it when ready.";
+  }, [catalog, mode]);
+
+  // Initial greeting on mount
   useEffect(() => {
-    // reset on mode change
-    setMessages([]);
+    setMessages([{ id: crypto.randomUUID(), role: "assistant", content: friendlyGreeting }]);
+  }, []);
+
+  // Reset when mode changes
+  useEffect(() => {
+    setMessages([{ id: crypto.randomUUID(), role: "assistant", content: friendlyGreeting }]);
     setInput("");
     setIsProcessing(false);
     setHasStoppedChat(false);
     setFindResults([]);
-    // Optional greeting
-    setMessages([{ id: crypto.randomUUID(), role: "assistant", content: mode === "find" ? "Tell me what you’re looking for and I’ll find similar quotes." : "Tell me the quote details and I’ll create it when ready." }]);
   }, [mode]);
 
   const pushAssistant = (content: string) => setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "assistant", content }]);
-  const pushUser = (content: string) => setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "user", content }]);
 
   const callAi = async (allMessages: ChatMessage[]) => {
     const payload = {
@@ -134,7 +155,7 @@ export default function CreateQuotePage() {
     setIsProcessing(false);
     setHasStoppedChat(false);
     setFindResults([]);
-    setMessages([{ id: crypto.randomUUID(), role: "assistant", content: mode === "find" ? "Tell me what you’re looking for and I’ll find similar quotes." : "Tell me the quote details and I’ll create it when ready." }]);
+    setMessages([{ id: crypto.randomUUID(), role: "assistant", content: friendlyGreeting }]);
   };
 
   const onModeChange = (_: React.SyntheticEvent, newValue: string) => setMode(newValue as Mode);
@@ -159,13 +180,19 @@ export default function CreateQuotePage() {
           ) : (
             <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
               {findResults.map((r) => (
-                <Paper key={r.quoteId} variant="outlined" sx={{ p: 1.5 }}>
+                <Paper
+                  key={r.quoteId}
+                  variant="outlined"
+                  sx={{ p: 1.5, cursor: "pointer", transition: "background-color 120ms ease-in-out", "&:hover": { backgroundColor: (t) => t.palette.action.hover } }}
+                  onClick={() => {
+                    window.open(`/quotes/${r.quoteId}`, "_blank", "noopener,noreferrer");
+                  }}
+                >
                   <Box display="flex" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5 }}>
                     <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                       <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>{r.customerName}</Typography>
                       <Chip size="small" label={r.status} />
                     </Box>
-                    <Button size="small" onClick={() => router.push(`/quotes/${r.quoteId}`)}>View</Button>
                   </Box>
                   <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, mb: 1 }}>
                     <Chip size="small" label={`Package: ${r.package.name}`} />
@@ -175,6 +202,14 @@ export default function CreateQuotePage() {
                     <Chip size="small" label={`Total: $${(r.total as any).toFixed ? (r.total as any).toFixed(2) : r.total}`} />
                     <Chip size="small" label={format(new Date(r.createdAt), "MMM d, yyyy")} />
                   </Box>
+                  {r.addOns && r.addOns.length > 0 && (
+                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mb: 0.5 }}>
+                      <Typography variant="caption" sx={{ mr: 1 }} color="text.secondary">Add-ons:</Typography>
+                      {r.addOns.map((a) => (
+                        <Chip key={a.id} size="small" label={a.name} variant="outlined" />
+                      ))}
+                    </Box>
+                  )}
                   <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
                     <Typography variant="caption" sx={{ mr: 1 }} color="text.secondary">Similarity:</Typography>
                     {r.similarity.reasons.map((reason, idx) => (

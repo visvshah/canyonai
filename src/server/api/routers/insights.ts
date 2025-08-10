@@ -67,6 +67,7 @@ export const insightsRouter = createTRPCRouter({
 
     let totalValueApproved = 0;
     let totalValuePending = 0;
+    let totalValueSold = 0;
 
     let sumDiscountAll = 0;
     let countDiscountAll = 0;
@@ -97,7 +98,7 @@ export const insightsRouter = createTRPCRouter({
         totalValuePending += toSafeNumber(q.total);
       } else if (q.status === QuoteStatus.Sold) {
         totalSold += 1;
-        totalValueApproved += toSafeNumber(q.total);
+        totalValueSold += toSafeNumber(q.total);
       }
 
       const steps = q.approvalWorkflow?.steps ?? [];
@@ -109,16 +110,28 @@ export const insightsRouter = createTRPCRouter({
           const pendingStep = steps[pendingIndex]!;
           quotesByStage[pendingStep.persona] += 1;
 
-          // Determine when this pending step started waiting: last approvedAt before it, otherwise quote.createdAt
-          let lastApprovedBefore: Date | null = null;
+          // Determine when this pending step started.
+          // Robust baseline:
+          // - step.updatedAt when it became Pending (preferred)
+          // - step.createdAt (covers newly-inserted steps)
+          // - last previous step approvedAt (normal progression)
+          // - quote.createdAt (final fallback)
+          let lastPrevApprovedAt: Date | null = null;
           for (let j = pendingIndex - 1; j >= 0; j--) {
             const prev = steps[j]!;
             if (prev.status === ApprovalStatus.Approved && prev.approvedAt) {
-              lastApprovedBefore = prev.approvedAt;
+              lastPrevApprovedAt = prev.approvedAt;
               break;
             }
           }
-          const waitStart = lastApprovedBefore ?? q.createdAt;
+          const candidates: Date[] = [];
+          if (pendingStep.updatedAt) candidates.push(pendingStep.updatedAt);
+          if (pendingStep.createdAt) candidates.push(pendingStep.createdAt);
+          if (lastPrevApprovedAt) candidates.push(lastPrevApprovedAt);
+          if (q.updatedAt) candidates.push(q.updatedAt);
+          candidates.push(q.createdAt);
+          // Use the most recent candidate to avoid backdating inserted steps
+          const waitStart = new Date(Math.max(...candidates.map((d) => d.getTime())));
           const waitMs = Math.max(0, now.getTime() - waitStart.getTime());
           const agg = pendingWaitAgg[pendingStep.persona];
           agg.totalMs += waitMs;
@@ -126,32 +139,20 @@ export const insightsRouter = createTRPCRouter({
         }
       }
 
-      // Compute approval times per persona based on deltas between approvals
-      // Use quote.createdAt for the first step baseline
-      let previousApprovedAt: Date | null = null;
+      // Compute approval times per persona as (approvedAt - updatedAtWhenBecamePending)
       for (let i = 0; i < steps.length; i++) {
         const step = steps[i]!;
-        if (step.status === ApprovalStatus.Approved && step.approvedAt) {
-          const start = previousApprovedAt ?? q.createdAt;
+        if ((step.status === ApprovalStatus.Approved || step.status === ApprovalStatus.Rejected) && step.approvedAt) {
+          const start = step.updatedAt ?? q.createdAt;
           const end = step.approvedAt;
           const ms = Math.max(0, end.getTime() - start.getTime());
           const agg = personaDurations[step.persona];
           agg.totalMs += ms;
           agg.count += 1;
-          previousApprovedAt = end;
-        } else if (step.status === ApprovalStatus.Rejected && step.approvedAt) {
-          // Treat rejection as an end for time-to-decision at that persona
-          const start = previousApprovedAt ?? q.createdAt;
-          const end = step.approvedAt;
-          const ms = Math.max(0, end.getTime() - start.getTime());
-          const agg = personaDurations[step.persona];
-          agg.totalMs += ms;
-          agg.count += 1;
-          previousApprovedAt = end;
-          // Stop at rejection
-          break;
-        } else {
-          // Pending steps do not contribute yet
+          if (step.status === ApprovalStatus.Rejected) {
+            // Stop at rejection
+            break;
+          }
         }
       }
 
@@ -197,7 +198,7 @@ export const insightsRouter = createTRPCRouter({
     } as const;
 
     return {
-      snapshot: { generatedAt: new Date() },
+      snapshot: { generatedAt: now },
       totals: {
         totalQuotes,
         totalApproved,
@@ -206,6 +207,7 @@ export const insightsRouter = createTRPCRouter({
         totalSold,
         totalValueApproved,
         totalValuePending,
+        totalValueSold,
       },
       pipelineByStatus,
       quotesByStage,

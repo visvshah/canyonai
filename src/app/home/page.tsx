@@ -1,9 +1,8 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, type RouterOutputs } from "~/trpc/react";
+import { api } from "~/trpc/react";
 import { Role } from "@prisma/client";
 import {
   Box,
@@ -22,16 +21,24 @@ import {
 } from "@mui/material";
 import { format } from "date-fns";
 
-type PendingQuote = RouterOutputs["quote"]["pendingByRole"][number];
-
-function getNextApprovalPersona(quote: PendingQuote): string {
-  const steps = quote.approvalWorkflow?.steps ?? [];
-  const pendingStep = steps.find((s) => s.status === "Pending");
-  if (!pendingStep) return "—";
-  if (pendingStep.approver) {
-    return pendingStep.approver.name ?? pendingStep.approver.email ?? "User";
+function formatCurrency(value: unknown): string {
+  const num = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(num)) return String(value ?? "—");
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 2,
+    }).format(num);
+  } catch {
+    return `$${num.toFixed(2)}`;
   }
-  return pendingStep.persona;
+}
+
+function formatPercent(value: unknown): string {
+  const num = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(num)) return String(value ?? "—");
+  return `${num.toFixed(1)}%`;
 }
 
 export default function HomePage() {
@@ -112,30 +119,36 @@ export default function HomePage() {
                 <TableCell>Customer</TableCell>
                 <TableCell>Org</TableCell>
                 <TableCell>Status</TableCell>
-                <TableCell>Next Approval</TableCell>
+                <TableCell>Discount</TableCell>
+                <TableCell>Total</TableCell>
                 <TableCell>Created</TableCell>
                 <TableCell align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {quotes.map((q) => (
-                <TableRow key={q.id} hover>
-                  <TableCell>
-                    <Button component={Link} href={`/quotes/${q.id}?from=home&role=${selectedRole}`} variant="text">
-                      {q.customerName}
-                    </Button>
-                  </TableCell>
+                <TableRow
+                  key={q.id}
+                  hover
+                  sx={{ cursor: "pointer" }}
+                  onClick={() => router.push(`/quotes/${q.id}?from=home&role=${selectedRole}`)}
+                >
+                  <TableCell>{q.customerName}</TableCell>
                   <TableCell>{q.org.name}</TableCell>
                   <TableCell>
                     <Chip label={q.status} size="small" />
                   </TableCell>
-                  <TableCell>{getNextApprovalPersona(q)}</TableCell>
+                  <TableCell>{formatPercent(q.discountPercent as any)}</TableCell>
+                  <TableCell>{formatCurrency(q.total as any)}</TableCell>
                   <TableCell>{format(new Date(q.createdAt), "MMM d, yyyy")}</TableCell>
                   <TableCell align="right">
                     <Button
                       size="small"
                       variant="contained"
-                      onClick={() => handleApprove(q.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleApprove(q.id);
+                      }}
                       disabled={approveMutation.isPending}
                     >
                       Approve

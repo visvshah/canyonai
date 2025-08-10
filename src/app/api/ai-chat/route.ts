@@ -79,6 +79,11 @@ export async function POST(req: Request) {
 
       if (fnName === "find_similar_quotes") {
         const args = sanitizeFindArgs(fnArgs);
+        // Enforce package presence server-side as well; add-ons are optional
+        const hasPackage = Boolean(args.packageId) || Boolean(args.productName);
+        if (!hasPackage) {
+          return NextResponse.json({ type: "error", message: "Specify a package (id or name)." }, { status: 400 });
+        }
         const results = await trpcCaller.quote.findSimilarQuotes(args);
         return NextResponse.json({ type: "find_results", data: results });
       }
@@ -131,33 +136,51 @@ export async function POST(req: Request) {
 }
 
 function buildSystemPrompt(mode: Mode, catalogText: string): string {
-  const common = `You are a helpful CPQ assistant inside Canyon CPQ.
-- Always keep replies brief and targeted (1-2 sentences max when asking questions).
-- Ask only for the missing fields required to make a tool call.
-- Do not invent products or add-ons. Use the organization's catalog below.
-- Prefer exact names from the catalog; if the user's term is ambiguous, propose the closest 2-3 options from the catalog and ask them to pick.
-- Once a tool call is possible, call it immediately and then STOP.
+  const COMMON_PROMPT = `
+    You are Canyon CPQ’s quote copilot.
+    Your job is to (a) extract only the fields needed to make a tool call and (b) call the tool as soon as those fields are available.
 
-Catalog for this organization (use these names and ids as ground truth):
-${catalogText}`;
+    Style:
+    - Be concise. When asking questions, use 1–2 short sentences and ask only for missing required fields.
+    - Do not explain your reasoning, summarize plans, or add chit-chat.
+    - Never invent products or add-ons. The catalog below is ground truth.
+
+    Catalog usage:
+    - Treat synonyms: "seats" ≈ "licenses" ≈ "users"; "discount" ≈ "% off"; "package" may refer to a product tier/bundle.
+
+    General rules:
+    - If a tool call is possible, CALL IT IMMEDIATELY
+    - If a tool call is not yet possible, ask the single smallest question that unblocks it.
+    - Use the user’s exact wording/values when filling fields (don’t “clean up” names or numbers - but resolve products and add-ons to the following attached catalog names/ids when making tool calls).
+
+    Catalog of products and add-ons (ground truth):
+    ${catalogText}
+
+`.trim();
   if (mode === "find") {
     return (
-      common +
-      `\n\nMode: Find quotes.
-- Ask minimal clarifying questions (product/package, seats, notable add-ons, discount, payment kind).
-- When you have enough signal to search (at least product name OR seats), call find_similar_quotes with any provided fields.
-- After calling the tool, STOP. Do not continue chatting.`
-    );
+      COMMON_PROMPT +
+      `\nMode: Find quotes (retrieve similar approved quotes).
+
+        Goal:
+        - Call find_similar_quotes as soon as a package is identified.
+
+        Rules:
+        - The ONLY required field is a specific package (id or exact name from the catalog).
+        - As soon as the user specifies a package, CALL find_similar_quotes IMMEDIATELY.
+        - Add-ons are optional; include them only if the user mentions any.
+        - Provide any known fields; the tool tolerates partial inputs.`
+      );
   }
   return (
-    common +
-    `\n\nMode: Create quote.
-- Ask minimal clarifying questions to gather required fields.
-- Required: productName (or packageId), seats, customerName, paymentKind.
-- If paymentKind is NET, require netDays. If BOTH, require both netDays and prepayPercent (PREPAY can default to 100 if omitted).
-- When all required info is present, call create_quote immediately with the fields as provided.
-- After calling the tool successfully, STOP. Do not continue chatting.`
-  );
+    COMMON_PROMPT +
+      `\n\nMode: Create quote.
+      - Ask minimal clarifying questions to gather required fields.
+      - Required: productName
+      - If paymentKind is NET, require netDays. If BOTH, require both netDays and prepayPercent (PREPAY can default to 100 if omitted).
+      - When all required info is present, call create_quote immediately with the fields as provided.
+      - After calling the tool successfully, STOP. Do not continue chatting.`
+    );
 }
 
 function buildToolsSchema() {
@@ -167,19 +190,14 @@ function buildToolsSchema() {
       function: {
         name: "find_similar_quotes",
         description:
-          "Find similar approved/sold quotes. Provide any known fields; the tool tolerates partial inputs and returns ranked results.",
+          "Find approved quotes that MATCH the provided package. Call immediately once a package (id or exact name) is known. The tool tolerates partial inputs.",
         parameters: {
           type: "object",
           properties: {
             packageId: { type: "string", description: "Exact package ID if known" },
-            productName: { type: "string", description: "Product/package name or partial match" },
-            seats: { type: "integer", minimum: 1 },
-            discountPercent: { type: "number", minimum: 0, maximum: 100 },
+            productName: { type: "string", description: "Product/package name (prefer exact)" },
             addOnIds: { type: "array", items: { type: "string" } },
             addOnNames: { type: "array", items: { type: "string" } },
-            paymentKind: { type: "string", enum: ["NET", "PREPAY", "BOTH"] },
-            recentDays: { type: "integer", minimum: 1, maximum: 3650 },
-            limit: { type: "integer", minimum: 1, maximum: 50 },
           },
           additionalProperties: false,
         },
@@ -222,8 +240,6 @@ function sanitizeFindArgs(input: any) {
   if (Array.isArray(input.addOnIds)) args.addOnIds = input.addOnIds.filter((x: any) => typeof x === "string");
   if (Array.isArray(input.addOnNames)) args.addOnNames = input.addOnNames.filter((x: any) => typeof x === "string");
   if (typeof input.paymentKind === "string" && ["NET", "PREPAY", "BOTH"].includes(input.paymentKind)) args.paymentKind = input.paymentKind as PaymentKind;
-  if (Number.isInteger(input.recentDays)) args.recentDays = clampInt(input.recentDays, 1, 3650);
-  if (Number.isInteger(input.limit)) args.limit = clampInt(input.limit, 1, 50);
   return args;
 }
 
@@ -259,37 +275,31 @@ async function safeText(res: Response) {
 
 async function buildCatalogContext(trpcCtx: Awaited<ReturnType<typeof createTRPCContext>>): Promise<string> {
   const db = trpcCtx.db;
-  // Resolve an org to scope catalog (prefer session user's org; else first org)
-  let orgId: string | null = null;
-  try {
-    const sessionUserId = trpcCtx.session?.user?.id ?? null;
-    let user: any = null;
-    if (sessionUserId) {
-      user = await db.user.findUnique({ where: { id: sessionUserId }, select: { orgId: true } });
-    } else {
-      user = await db.user.findFirst({ select: { orgId: true } });
-    }
-    orgId = user?.orgId ?? (await db.org.findFirst({ select: { id: true } }))?.id ?? null;
-  } catch {
-    orgId = null;
+
+  const sessionUserId = trpcCtx.session?.user?.id ?? null;
+  let orgId: string | undefined;
+  if (sessionUserId) {
+    orgId = (await db.user.findUnique({ where: { id: sessionUserId }, select: { orgId: true } }))?.orgId ?? undefined;
+  }
+  if (!orgId) {
+    orgId = (await db.org.findFirst({ select: { id: true } }))?.id;
   }
 
-  const whereOrg = orgId ? { orgId } : {};
   const [packages, addOns] = await Promise.all([
-    db.package.findMany({ where: whereOrg as any, select: { id: true, name: true, unitPrice: true }, orderBy: { name: "asc" } }),
-    db.addOn.findMany({ where: whereOrg as any, select: { id: true, name: true, unitPrice: true }, orderBy: { name: "asc" } }),
+    db.package.findMany({ where: orgId ? { orgId } : undefined, select: { id: true, name: true, unitPrice: true }, orderBy: { name: "asc" } }),
+    db.addOn.findMany({ where: orgId ? { orgId } : undefined, select: { id: true, name: true, unitPrice: true }, orderBy: { name: "asc" } }),
   ]);
 
   const pkgLines = packages
     .slice(0, 50)
-    .map((p) => `- ${p.name} (id: ${p.id}, $${Number(p.unitPrice).toFixed(2)}/unit)`) // limit length
+    .map((p) => `- ${p.name} (id: ${p.id})`)
     .join("\n");
   const addOnLines = addOns
     .slice(0, 50)
-    .map((a) => `- ${a.name} (id: ${a.id}, $${Number(a.unitPrice).toFixed(2)}/unit)`) // limit length
+    .map((a) => `- ${a.name} (id: ${a.id})`)
     .join("\n");
 
-  return `Packages:\n${pkgLines || "- (none)"}\n\nAdd-ons:\n${addOnLines || "- (none)"}`;
+  return `Packages:\n${pkgLines}\nAdd-ons:\n${addOnLines}`;
 }
 
 

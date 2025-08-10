@@ -1,7 +1,7 @@
 "use client";
 
 import { api } from "~/trpc/react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, Typography, Chip, LinearProgress, Box, Tooltip } from "@mui/material";
 
 function formatMsToHuman(ms: number | null | undefined): string {
@@ -26,6 +26,18 @@ function formatCurrency(n: number) {
 
 export default function InsightsPage() {
   const { data, isLoading } = api.insights.overview.useQuery();
+
+  // Live timer
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const elapsedSinceSnapshotMs = useMemo(() => {
+    if (!data) return 0;
+    const generatedAt = new Date(data.snapshot.generatedAt).getTime();
+    return Math.max(0, nowMs - generatedAt);
+  }, [data, nowMs]);
 
   const outcome = useMemo(() => {
     if (!data) return null;
@@ -94,7 +106,9 @@ export default function InsightsPage() {
             <CardContent>
               <Box display="flex" flexWrap="wrap" gap={1}>
                 {Object.entries(data.quotesByStage).map(([persona, count]) => {
-                  const avgWait = (data.avgPendingWaitMsByPersona as any)[persona] as number | null;
+                  const personaKey = persona as keyof typeof data.avgPendingWaitMsByPersona;
+                  const baseAvgWait = data.avgPendingWaitMsByPersona[personaKey];
+                  const avgWait = baseAvgWait != null ? baseAvgWait + elapsedSinceSnapshotMs : null;
                   return (
                     <Chip key={persona} label={`${persona}: ${count as number} · avg wait ${formatMsToHuman(avgWait)}`} variant="outlined" />
                   );
@@ -127,7 +141,8 @@ export default function InsightsPage() {
             <Card variant="outlined">
               <CardHeader title="Value by Status" />
               <CardContent>
-                <Typography>Approved/Sold: {formatCurrency(data.totals.totalValueApproved)}</Typography>
+                <Typography>Approved: {formatCurrency(data.totals.totalValueApproved)}</Typography>
+                <Typography>Sold: {formatCurrency(data.totals.totalValueSold)}</Typography>
                 <Typography>Pending: {formatCurrency(data.totals.totalValuePending)}</Typography>
               </CardContent>
             </Card>
