@@ -1,17 +1,24 @@
 import { z } from "zod";
-import { Prisma, Role, ApprovalStatus, QuoteStatus } from "@prisma/client";
+import { Prisma, Role, ApprovalStatus, QuoteStatus, PaymentKind } from "@prisma/client";
 
 import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
+import { env } from "~/env";
 
 // Centralized status updater: computes Quote.status from its workflow steps
 // Rules:
 // - Any step Rejected => Quote Rejected
 // - Else any step Pending => Quote Pending
-// - Else (all Approved or Skipped, or no steps) => Quote Approved
+// - Else (all Approved, or no steps) => Quote Approved
 const updateQuoteStatus = async (
   tx: Prisma.TransactionClient,
   quoteId: string,
 ) => {
+  // Do not override Sold quotes
+  const existing = await tx.quote.findUnique({ where: { id: quoteId }, select: { status: true } });
+  if (existing?.status === QuoteStatus.Sold) {
+    return QuoteStatus.Sold;
+  }
+
   const workflow = await tx.approvalWorkflow.findUnique({
     where: { quoteId },
     include: { steps: true },
@@ -67,6 +74,8 @@ export const quoteRouter = createTRPCRouter({
         include: {
           org: true,
           package: true,
+          addOns: true,
+          createdBy: true,
           approvalWorkflow: {
             include: {
               steps: {
@@ -93,6 +102,8 @@ export const quoteRouter = createTRPCRouter({
         include: {
           org: true,
           package: true,
+          addOns: true,
+          createdBy: true,
           approvalWorkflow: {
             include: {
               steps: {
@@ -165,5 +176,397 @@ export const quoteRouter = createTRPCRouter({
         await updateQuoteStatus(tx, quoteId);
       });
       return { success: true };
+    }),
+
+  /**
+   * Find similar quotes based on structured, partially-specified fields.
+   * Ranking favors exact package match, close seat counts, overlapping add-ons, similar discount,
+   * same payment kind, and recency. Results are limited, explainable, and JSON-friendly.
+   */
+  findSimilarQuotes: publicProcedure
+    .input(
+      z
+        .object({
+          packageId: z.string().optional(),
+          productName: z.string().optional(),
+          seats: z.number().int().positive().optional(),
+          discountPercent: z.number().min(0).max(100).optional(),
+          addOnIds: z.array(z.string()).optional().default([]),
+          addOnNames: z.array(z.string()).optional().default([]),
+          paymentKind: z.nativeEnum(PaymentKind).optional(),
+          recentDays: z.number().int().min(1).max(3650).default(365),
+          limit: z.number().int().min(1).max(50).default(10),
+        })
+        .default({}),
+    )
+    .query(async ({ ctx, input }) => {
+      const params = input;
+      const recentThreshold = new Date(Date.now() - (params.recentDays ?? 365) * 24 * 60 * 60 * 1000);
+
+      const candidates = await ctx.db.quote.findMany({
+        where: {
+          createdAt: { gte: recentThreshold },
+          status: { in: [QuoteStatus.Approved, QuoteStatus.Sold] },
+        },
+        include: {
+          package: true,
+          addOns: true,
+        },
+        orderBy: { createdAt: "desc" },
+        take: 200, // cap candidates for scoring
+      });
+
+      const normalizedProduct = (params.productName ?? "").trim().toLowerCase();
+      const normalizedAddOnNames = (params.addOnNames ?? []).map((n: string) => n.trim().toLowerCase());
+      const addOnIdSet = new Set(params.addOnIds ?? []);
+
+      const seats = params.seats;
+      const seatBand = seats != null ? Math.max(2, Math.round(seats * 0.2)) : null;
+
+      const scored = candidates.map((q) => {
+        let score = 0;
+        const reasons: string[] = [];
+
+        // Package / product matching
+        if (params.packageId && q.packageId === params.packageId) {
+          score += 4;
+          reasons.push("same packageId");
+        } else if (normalizedProduct) {
+          const name = q.package.name.toLowerCase();
+          if (name === normalizedProduct) {
+            score += 3;
+            reasons.push("exact product name match");
+          } else if (name.includes(normalizedProduct)) {
+            score += 2;
+            reasons.push("product name contains");
+          }
+        }
+
+        // Seats proximity
+        if (seats != null && seatBand != null) {
+          const diff = Math.abs(q.quantity - seats);
+          if (diff === 0) {
+            score += 3;
+            reasons.push("exact seat count");
+          } else if (diff <= Math.max(1, Math.round((seatBand * 0.5)))) {
+            score += 2;
+            reasons.push("close seat count");
+          } else if (diff <= seatBand) {
+            score += 1;
+            reasons.push("within seat band");
+          }
+        }
+
+        // Discount proximity
+        if (params.discountPercent != null) {
+          const diff = Math.abs(Number(q.discountPercent) - params.discountPercent);
+          if (diff <= 2) {
+            score += 2;
+            reasons.push("discount ±2%");
+          } else if (diff <= 5) {
+            score += 1;
+            reasons.push("discount ±5%");
+          }
+        }
+
+        // Add-on overlap
+        if (addOnIdSet.size > 0 || normalizedAddOnNames.length > 0) {
+          let overlap = 0;
+          for (const ao of q.addOns) {
+            if (addOnIdSet.has(ao.id)) overlap += 1;
+            else if (normalizedAddOnNames.some((n) => ao.name.toLowerCase().includes(n))) overlap += 1;
+          }
+          if (overlap > 0) {
+            score += Math.min(3, overlap);
+            reasons.push(`${overlap} add-on overlap`);
+          }
+        }
+
+        // Payment kind
+        if (params.paymentKind && q.paymentKind === params.paymentKind) {
+          score += 1;
+          reasons.push("same payment kind");
+        }
+
+        // Recency booster (last 90 days)
+        const daysAgo = (Date.now() - q.createdAt.getTime()) / (1000 * 60 * 60 * 24);
+        if (daysAgo <= 90) {
+          score += 1;
+          reasons.push("recent");
+        }
+
+        return { q, score, reasons };
+      });
+
+      const ranked = scored
+        .filter((s) => s.score > 0)
+        .sort((a, b) => (b.score - a.score) || (b.q.createdAt.getTime() - a.q.createdAt.getTime()))
+        .slice(0, params.limit ?? 10)
+        .map(({ q, score, reasons }) => ({
+          quoteId: q.id,
+          createdAt: q.createdAt,
+          status: q.status,
+          customerName: q.customerName,
+          package: { id: q.packageId, name: q.package.name },
+          quantity: q.quantity,
+          discountPercent: Number(q.discountPercent),
+          addOns: q.addOns.map((a) => ({ id: a.id, name: a.name })),
+          paymentKind: q.paymentKind,
+          netDays: q.netDays,
+          prepayPercent: q.prepayPercent != null ? Number(q.prepayPercent) : null,
+          subtotal: Number(q.subtotal),
+          total: Number(q.total),
+          similarity: { score, reasons },
+        }));
+
+      return { status: "ok", results: ranked } as const;
+    }),
+
+  /**
+   * Create a new quote from structured inputs, resolve package/add-ons, compute pricing, and
+   * generate an HTML contract. Falls back to a local template if no LLM is available.
+   */
+  createQuote: publicProcedure
+    .input(
+      z.object({
+        packageId: z.string().optional(),
+        productName: z.string().optional(),
+        seats: z.number().int().positive(),
+        discountPercent: z.number().min(0).max(100).default(0),
+        addOnIds: z.array(z.string()).optional().default([]),
+        addOnNames: z.array(z.string()).optional(),
+        customerName: z.string(),
+        paymentKind: z.nativeEnum(PaymentKind).default(PaymentKind.NET),
+        netDays: z.number().int().positive().optional(),
+        prepayPercent: z.number().min(0).max(100).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Resolve user and org (prefer session user)
+      const sessionUserId = ctx.session?.user?.id ?? null;
+      const createdBy = sessionUserId
+        ? await ctx.db.user.findUnique({ where: { id: sessionUserId } })
+        : await ctx.db.user.findFirst();
+      if (!createdBy) {
+        return { status: "error", error: { code: "no_user", message: "No user available to assign as quote creator." } } as const;
+      }
+
+      const orgId = createdBy.orgId ?? (await ctx.db.org.findFirst())?.id;
+      if (!orgId) {
+        return { status: "error", error: { code: "no_org", message: "No organisation found to assign to the new quote." } } as const;
+      }
+
+      // Resolve package (prefer packageId)
+      let pkg = null as null | { id: string; name: string; unitPrice: Prisma.Decimal };
+      if (input.packageId) {
+        pkg = await ctx.db.package.findFirst({ where: { id: input.packageId, orgId } });
+      } else if (input.productName) {
+        const name = input.productName.trim();
+        const candidates = await ctx.db.package.findMany({ where: { orgId } });
+        const exact = candidates.find((p) => p.name.toLowerCase() === name.toLowerCase());
+        const contains = exact ?? candidates.find((p) => p.name.toLowerCase().includes(name.toLowerCase()));
+        pkg = contains ?? null;
+      }
+
+      if (!pkg) {
+        return { status: "error", error: { code: "package_not_found", message: "Could not resolve package. Provide a valid packageId or productName." } } as const;
+      }
+
+      // Resolve add-ons (by id and/or fuzzy name)
+      const addOnIdSet = new Set(input.addOnIds ?? []);
+      if (input.addOnNames && input.addOnNames.length > 0) {
+        const allAddOns = await ctx.db.addOn.findMany({ where: { orgId } });
+        const lowerNames = input.addOnNames.map((n) => n.trim().toLowerCase());
+        for (const ao of allAddOns) {
+          if (lowerNames.some((n) => ao.name.toLowerCase().includes(n))) {
+            addOnIdSet.add(ao.id);
+          }
+        }
+      }
+      const addOnIds = Array.from(addOnIdSet);
+      const addOns = addOnIds.length
+        ? await ctx.db.addOn.findMany({ where: { id: { in: addOnIds }, orgId } })
+        : [];
+
+      // Validate payment fields coherence
+      if (input.paymentKind === PaymentKind.NET) {
+        if (input.netDays == null) {
+          return { status: "error", error: { code: "validation_error", message: "netDays is required when paymentKind is NET." } } as const;
+        }
+      } else if (input.paymentKind === PaymentKind.PREPAY) {
+        // default 100% prepay if not provided
+      } else if (input.paymentKind === PaymentKind.BOTH) {
+        if (input.netDays == null || input.prepayPercent == null) {
+          return { status: "error", error: { code: "validation_error", message: "netDays and prepayPercent are required when paymentKind is BOTH." } } as const;
+        }
+      }
+
+      const seats = input.seats;
+      const discountPctNum = input.discountPercent ?? 0;
+      const packageUnit = Number(pkg.unitPrice);
+      const addOnSum = addOns.reduce((acc, ao) => acc + Number(ao.unitPrice), 0);
+      const subtotalNum = packageUnit * seats + addOnSum;
+      const totalNum = subtotalNum * (1 - discountPctNum / 100);
+      const toCurrency = (n: number) => Number(n.toFixed(2));
+
+      const quote = await ctx.db.quote.create({
+        data: {
+          orgId,
+          createdById: createdBy.id,
+          packageId: pkg.id,
+          quantity: seats,
+          seatCount: seats,
+          customerName: input.customerName,
+          paymentKind: input.paymentKind,
+          netDays: input.paymentKind !== PaymentKind.PREPAY ? input.netDays ?? null : null,
+          prepayPercent:
+            input.paymentKind !== PaymentKind.NET
+              ? (input.prepayPercent != null ? new Prisma.Decimal(input.prepayPercent) : new Prisma.Decimal(100))
+              : null,
+          subtotal: new Prisma.Decimal(toCurrency(subtotalNum)),
+          discountPercent: new Prisma.Decimal(discountPctNum),
+          total: new Prisma.Decimal(toCurrency(totalNum)),
+          status: QuoteStatus.Pending,
+          addOns: addOns.length ? { connect: addOns.map((a) => ({ id: a.id })) } : undefined,
+        },
+      });
+
+      // Generate contract HTML
+      const contractInput = {
+        quoteId: quote.id,
+        customerName: quote.customerName,
+        productName: pkg.name,
+        seats,
+        addOns: addOns.map((a) => a.name),
+        subtotal: toCurrency(subtotalNum),
+        discountPercent: discountPctNum,
+        total: toCurrency(totalNum),
+        paymentKind: input.paymentKind,
+        netDays: input.netDays ?? null,
+        prepayPercent: input.prepayPercent ?? (input.paymentKind === PaymentKind.PREPAY ? 100 : null),
+        createdAt: quote.createdAt,
+      };
+
+    
+      async function generateContract(ci: typeof contractInput): Promise<string | null> {
+        try {
+          const apiKey = env.OPENAI_KEY;
+          if (!apiKey) return null;
+          const prompt = `Create a concise, professional SaaS order form as minimal HTML only (no markdown). Include: Quote ID ${ci.quoteId}, Customer ${ci.customerName}, Package ${ci.productName} x ${ci.seats} seats, Add-ons ${ci.addOns.join(", ") || "None"}, Subtotal $${ci.subtotal.toFixed ? ci.subtotal.toFixed(2) : ci.subtotal}, Discount ${ci.discountPercent}%, Total $${ci.total.toFixed ? ci.total.toFixed(2) : ci.total}, Payment ${ci.paymentKind}${ci.netDays ? ", Net " + ci.netDays + " days" : ""}${ci.prepayPercent ? ", Prepay " + ci.prepayPercent + "%" : ""}. Use simple inline styles, and headings for sections.`;
+
+          // Prefer Responses API when available; fall back to Chat Completions
+          const responsesRes = await fetch("https://api.openai.com/v1/responses", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+            body: JSON.stringify({
+              model: "gpt-4o-mini",
+              input: prompt,
+              temperature: 0.3,
+            }),
+          });
+          if (responsesRes.ok) {
+            const data = (await responsesRes.json()) as any;
+            const out = data?.output_text ?? data?.content?.[0]?.text ?? null;
+            if (out && typeof out === "string") return out.trim();
+          }
+
+          const chatRes = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+            body: JSON.stringify({
+              model: "gpt-4o-mini",
+              messages: [
+                { role: "system", content: "You generate short, production-ready HTML contracts. Output raw HTML only." },
+                { role: "user", content: prompt },
+              ],
+              temperature: 0.3,
+            }),
+          });
+          if (chatRes.ok) {
+            const data = (await chatRes.json()) as any;
+            const out = data?.choices?.[0]?.message?.content ?? null;
+            if (out && typeof out === "string") return out.trim();
+          }
+        } catch {
+          // ignore and fallback
+        }
+        return null;
+      }
+
+      const contractText = await generateContract(contractInput);
+
+      await ctx.db.quote.update({ where: { id: quote.id }, data: { documentHtml: contractText } });
+
+      // Auto-generate an approval workflow for the new quote
+      function buildApprovalChain(discountPercent: number, paymentKind: PaymentKind, netDays: number | null): Role[] {
+        const roles: Role[] = [Role.AE];
+        if (discountPercent > 0 && discountPercent <= 15) {
+          roles.push(Role.DEALDESK);
+        } else if (discountPercent > 15 && discountPercent <= 40) {
+          roles.push(Role.CRO);
+        } else if (
+          discountPercent > 40 ||
+          paymentKind === PaymentKind.BOTH ||
+          (paymentKind === PaymentKind.NET && (netDays ?? 0) >= 60)
+        ) {
+          roles.push(Role.FINANCE);
+        }
+        roles.push(Role.LEGAL);
+        return roles;
+      }
+
+      const chain = buildApprovalChain(discountPctNum, input.paymentKind, input.netDays ?? null);
+      await ctx.db.$transaction(async (tx) => {
+        // Ensure workflow exists
+        const existingWf = await tx.approvalWorkflow.findUnique({ where: { quoteId: quote.id } });
+        const workflowId = existingWf?.id ?? (await tx.approvalWorkflow.create({ data: { quoteId: quote.id } })).id;
+
+        // Reset steps
+        await tx.approvalStep.deleteMany({ where: { approvalWorkflowId: workflowId } });
+
+        // Create AE step as approved by the creator (if available)
+        const approverId = createdBy.id ?? null;
+        await tx.approvalStep.create({
+          data: {
+            approvalWorkflowId: workflowId,
+            stepOrder: 1,
+            persona: Role.AE,
+            approverId,
+            status: ApprovalStatus.Approved,
+            approvedAt: new Date(),
+          },
+        });
+
+        // Remaining steps pending
+        let order = 2;
+        for (const persona of chain.slice(1)) {
+          await tx.approvalStep.create({
+            data: {
+              approvalWorkflowId: workflowId,
+              stepOrder: order,
+              persona,
+              status: ApprovalStatus.Pending,
+            },
+          });
+          order += 1;
+        }
+
+        // Recompute the quote status from its steps
+        await updateQuoteStatus(tx, quote.id);
+      });
+
+      return {
+        status: "ok",
+        quoteId: quote.id,
+        contractGenerated: Boolean(contractText),
+        package: { id: pkg.id, name: pkg.name },
+        seats,
+        addOnCount: addOns.length,
+        pricing: {
+          subtotal: toCurrency(subtotalNum),
+          discountPercent: discountPctNum,
+          total: toCurrency(totalNum),
+        },
+      } as const;
     }),
 });
