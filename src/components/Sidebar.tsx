@@ -19,11 +19,13 @@ import InsightsIcon from "@mui/icons-material/Insights";
 import HomeIcon from "@mui/icons-material/Home";
 import { usePathname } from "next/navigation";
 import BusinessIcon from "@mui/icons-material/Business";
+import UploadFileIcon from "@mui/icons-material/UploadFile";
 
 const NAV_ITEMS = [
   { name: "Home", href: "/home", icon: HomeIcon },
   { name: "Quotes", href: "/quotes", icon: ListAltIcon },
   { name: "Create Quote", href: "/create-quote", icon: AddCircleOutlineIcon },
+  { name: "Import Quotes", href: "/import", icon: UploadFileIcon },
   { name: "Insights", href: "/insights", icon: InsightsIcon },
 ];
 
