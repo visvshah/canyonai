@@ -1,41 +1,31 @@
-# Create T3 App
+## Canyon AI — CPQ MVP
 
-This is a [T3 Stack](https://create.t3.gg/) project bootstrapped with `create-t3-app`.
+This is a focused CPQ/Deal Desk MVP for rapid quote creation, approvals, and insights. It includes an AI copilot that can find similar quotes or create a new quote with minimal input, automatic approval workflow gating, and a lightweight analytics dashboard.
 
-## What's next? How do I make an app with this?
+### Tech Stack
+- **Web framework**: Next.js (App Router) with React
+- **API & data layer**: tRPC
+- **Auth**: NextAuth.js with Google OAuth
+- **Database/ORM**: PostgreSQL (on supabase) + Prisma
+- **UI**: Material UI (MUI); Tailwind CSS 
+- **Drag & drop**: dnd-kit
+- **AI**: OpenAI Chat Completions (`gpt-4o-mini`)
 
-We try to keep this project as simple as possible, so you can start with just the scaffolding we set up for you, and add additional things later when they become necessary.
+### Core Functionality
+- **Quotes list and detail**
+  - `/quotes`: Filter by search term, packages, add-ons, and payment kinds.
+  - `/quotes/[id]`: Full details, live financials, payment terms, read-only workflow view, DnD editor to reorder/adjust workflow, approve as next persona.
 
-If you are not familiar with the different technologies used in this project, please refer to the respective docs. If you still are in the wind, please join our [Discord](https://t3.gg/discord) and ask for help.
+- **Home & insights**
+  - `/home`: Role-based "Your Approval Queue" to action the next pending step.
+  - `/insights`: Outcome mix, quotes-by-stage, timing metrics, discount insights, value breakdown by package/add-on.
 
-- [Next.js](https://nextjs.org)
-- [NextAuth.js](https://next-auth.js.org)
-- [Prisma](https://prisma.io)
-- [Drizzle](https://orm.drizzle.team)
-- [Tailwind CSS](https://tailwindcss.com)
-- [tRPC](https://trpc.io)
-
-## Learn More
-
-To learn more about the [T3 Stack](https://create.t3.gg/), take a look at the following resources:
-
-- [Documentation](https://create.t3.gg/)
-- [Learn the T3 Stack](https://create.t3.gg/en/faq#what-learning-resources-are-currently-available) — Check out these awesome tutorials
-
-You can check out the [create-t3-app GitHub repository](https://github.com/t3-oss/create-t3-app) — your feedback and contributions are welcome!
-
-## How do I deploy this?
-
-Follow our deployment guides for [Vercel](https://create.t3.gg/en/deployment/vercel), [Netlify](https://create.t3.gg/en/deployment/netlify) and [Docker](https://create.t3.gg/en/deployment/docker) for more information.
-
----
-
-## Prisma workflow
-
-| Task | Command |
-|------|---------|
-| Apply schema changes & regenerate types | `npx prisma db push && npx prisma generate` |
-| Run the seed script | `npx ts-node prisma/seed.ts` |
-| Open Prisma Studio (visual DB browser) | `npx prisma studio` |
-
-> Tip: run these from the project root.
+- **AI quote copilot** (`/create-quote`)
+  - Two modes: "find" similar approved/sold quotes, or "create" a new quote.
+  
+### Key Routes
+- `/create-quote` — AI copilot to find or create quotes
+- `/quotes` — Quotes table with filters
+- `/quotes/[id]` — Quote detail + workflow
+- `/home` — KPI tiles + approval queue by role
+- `/insights` — Analytics dashboard
