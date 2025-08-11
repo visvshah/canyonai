@@ -134,8 +134,7 @@ model Quote {
     createdBy       User          @relation("UserCreatedQuotes", fields: [createdById], references: [id])
     packageId       String
     package         Package       @relation(fields: [packageId], references: [id])
-    quantity        Int
-    seatCount       Int           @default(0)
+    quantity        Int           @default(0)
     addOns          AddOn[]
     customerName    String
     paymentKind     PaymentKind

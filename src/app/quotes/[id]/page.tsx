@@ -7,7 +7,7 @@ import { format, formatDistanceToNow } from "date-fns";
 import { Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton, Paper, Table, TableBody, TableCell, TableContainer, TableRow, Typography } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import DeleteIcon from "@mui/icons-material/Delete";
-import { Role, ApprovalStatus } from "@prisma/client";
+import { Role, ApprovalStatus, QuoteStatus } from "@prisma/client";
 
 import {
   DndContext,
@@ -360,6 +360,8 @@ export default function QuoteDetailPage() {
   const [draftSteps, setDraftSteps] = useState<Step[]>([]);
 
   const [editorOpen, setEditorOpen] = useState(false);
+  const [sendDialogOpen, setSendDialogOpen] = useState(false);
+  const [aiEditOpen, setAiEditOpen] = useState(false);
 
   useEffect(() => {
     if (!quote) return;
@@ -423,7 +425,7 @@ export default function QuoteDetailPage() {
     );
   }
 
-  const seats = (quote as any).seatCount ?? (quote as any).quantity ?? 1;
+  const seats = (quote as any).quantity ?? 1;
   const packageUnit = Number((quote as any).package?.unitPrice ?? 0);
   const addOnSum = ((quote as any).addOns ?? []).reduce(
     (acc: number, a: any) => acc + Number(a.unitPrice ?? 0),
@@ -439,6 +441,7 @@ export default function QuoteDetailPage() {
   const pendingSince = nextPending?.updatedAt ?? nextPending?.createdAt ?? quote.createdAt;
 
   const fmt = (n: number) => n.toLocaleString(undefined, { style: "currency", currency: "USD" });
+  const isApproved = quote.status === QuoteStatus.Approved;
 
   return (
     <main className="flex min-h-screen flex-col gap-6 p-6">
@@ -449,6 +452,23 @@ export default function QuoteDetailPage() {
         <Typography variant="h5" fontWeight={600} sx={{ ml: 1 }}>
           {quote.customerName}
         </Typography>
+      </Box>
+
+      <Box display="flex" justifyContent="flex-end" gap={1}>
+        <Button
+          variant="outlined"
+          onClick={() => setAiEditOpen(true)}
+        >
+          Edit Quote with AI
+        </Button>
+        <Button
+          variant="contained"
+          onClick={() => setSendDialogOpen(true)}
+          disabled={!isApproved}
+          title={!isApproved ? "Available when quote is Approved" : undefined}
+        >
+          Create & Send Contract
+        </Button>
       </Box>
 
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.2fr 1fr' }, gap: 2 }}>
@@ -508,6 +528,10 @@ export default function QuoteDetailPage() {
                       </Typography>
                     )}
                   </TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Seats</TableCell>
+                  <TableCell>{seats}</TableCell>
                 </TableRow>
                 {nextPending ? (
                   <TableRow>
@@ -648,6 +672,45 @@ export default function QuoteDetailPage() {
           <Button variant="contained" onClick={handleSaveWorkflow} disabled={!hasDraftUnsaved || setWorkflowMutation.isPending}>
             {setWorkflowMutation.isPending ? 'Saving...' : 'Save changes'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        fullWidth
+        maxWidth="sm"
+        open={sendDialogOpen}
+        onClose={() => setSendDialogOpen(false)}
+      >
+        <DialogTitle sx={{ color: (t) => t.palette.common.white }}>Create & Send Contract</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary">
+            Placeholder: This will generate a contract from the quote and send it to the customer via email when implemented.
+          </Typography>
+          {!isApproved ? (
+            <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
+              This action is available only when the quote is Approved.
+            </Typography>
+          ) : null}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSendDialogOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        fullWidth
+        maxWidth="sm"
+        open={aiEditOpen}
+        onClose={() => setAiEditOpen(false)}
+      >
+        <DialogTitle sx={{ color: (t) => t.palette.common.white }}>Edit Quote with AI</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary">
+            Placeholder: Here you will be able to ask AI to modify pricing, terms, or package details. Coming soon.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAiEditOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
 

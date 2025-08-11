@@ -12,6 +12,8 @@ export const insightsRouter = createTRPCRouter({
   overview: publicProcedure.query(async ({ ctx }) => {
     const quotes = await ctx.db.quote.findMany({
       include: {
+        package: true,
+        addOns: true,
         approvalWorkflow: {
           include: {
             steps: { orderBy: { stepOrder: "asc" } },
@@ -20,6 +22,10 @@ export const insightsRouter = createTRPCRouter({
       },
       orderBy: { createdAt: "desc" },
     });
+    const [allPackages, allAddOns] = await Promise.all([
+      ctx.db.package.findMany({}),
+      ctx.db.addOn.findMany({}),
+    ]);
 
     const pipelineByStatus: Record<QuoteStatus, number> = {
       [QuoteStatus.Pending]: 0,
@@ -73,6 +79,20 @@ export const insightsRouter = createTRPCRouter({
     let countDiscountRejected = 0;
 
     const now = new Date();
+
+    // Value breakdowns by status for packages and add-ons
+    const valueByStatusPerPackage: Record<QuoteStatus, Record<string, { id: string; name: string; value: number }>> = {
+      [QuoteStatus.Pending]: {},
+      [QuoteStatus.Approved]: {},
+      [QuoteStatus.Rejected]: {},
+      [QuoteStatus.Sold]: {},
+    };
+    const valueByStatusPerAddOn: Record<QuoteStatus, Record<string, { id: string; name: string; value: number }>> = {
+      [QuoteStatus.Pending]: {},
+      [QuoteStatus.Approved]: {},
+      [QuoteStatus.Rejected]: {},
+      [QuoteStatus.Sold]: {},
+    };
     for (const q of quotes) {
       totalQuotes += 1;
       pipelineByStatus[q.status] += 1;
@@ -182,6 +202,48 @@ export const insightsRouter = createTRPCRouter({
       avgDiscountRejected: countDiscountRejected ? sumDiscountRejected / countDiscountRejected : null,
     } as const;
 
+    // Sort breakdown entries by value desc for easier display
+    const sortDesc = <T extends { value: number }>(arr: T[]) => arr.sort((a, b) => b.value - a.value);
+    // Recompute breakdowns exactly as described: iterate over every package/add-on and then over all quotes
+    const statuses: QuoteStatus[] = [QuoteStatus.Approved, QuoteStatus.Sold, QuoteStatus.Pending, QuoteStatus.Rejected];
+    for (const pkg of allPackages) {
+      for (const q of quotes) {
+        if (q.packageId !== pkg.id) continue;
+        const seats = toSafeNumber(q.quantity);
+        const mult = Math.max(0, 1 - toSafeNumber(q.discountPercent) / 100);
+        const value = toSafeNumber((pkg as any).unitPrice) * seats * mult;
+        const bucket = valueByStatusPerPackage[q.status];
+        const existing = bucket[pkg.id] ?? { id: pkg.id, name: pkg.name, value: 0 };
+        existing.value += value;
+        bucket[pkg.id] = existing;
+      }
+    }
+
+    for (const addon of allAddOns) {
+      for (const q of quotes) {
+        if (!(q.addOns ?? []).some((a) => a.id === addon.id)) continue;
+        const mult = Math.max(0, 1 - toSafeNumber(q.discountPercent) / 100);
+        const value = toSafeNumber((addon as any).unitPrice) * mult;
+        const bucket = valueByStatusPerAddOn[q.status];
+        const existing = bucket[addon.id] ?? { id: addon.id, name: addon.name, value: 0 };
+        existing.value += value;
+        bucket[addon.id] = existing;
+      }
+    }
+
+    const breakdownByPackage = {
+      Pending: sortDesc(Object.values(valueByStatusPerPackage[QuoteStatus.Pending]).filter((i) => i.value > 0)),
+      Approved: sortDesc(Object.values(valueByStatusPerPackage[QuoteStatus.Approved]).filter((i) => i.value > 0)),
+      Rejected: sortDesc(Object.values(valueByStatusPerPackage[QuoteStatus.Rejected]).filter((i) => i.value > 0)),
+      Sold: sortDesc(Object.values(valueByStatusPerPackage[QuoteStatus.Sold]).filter((i) => i.value > 0)),
+    } as const;
+    const breakdownByAddOn = {
+      Pending: sortDesc(Object.values(valueByStatusPerAddOn[QuoteStatus.Pending]).filter((i) => i.value > 0)),
+      Approved: sortDesc(Object.values(valueByStatusPerAddOn[QuoteStatus.Approved]).filter((i) => i.value > 0)),
+      Rejected: sortDesc(Object.values(valueByStatusPerAddOn[QuoteStatus.Rejected]).filter((i) => i.value > 0)),
+      Sold: sortDesc(Object.values(valueByStatusPerAddOn[QuoteStatus.Sold]).filter((i) => i.value > 0)),
+    } as const;
+
     return {
       snapshot: { generatedAt: now },
       totals: {
@@ -201,6 +263,10 @@ export const insightsRouter = createTRPCRouter({
       avgPendingWaitMsByPersona,
       avgTimeToFullApprovalMs,
       discountStats,
+      valueBreakdown: {
+        byPackage: breakdownByPackage,
+        byAddOn: breakdownByAddOn,
+      },
     } as const;
   }),
 });

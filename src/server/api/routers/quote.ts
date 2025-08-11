@@ -118,27 +118,52 @@ export const quoteRouter = createTRPCRouter({
    * customer name or organisation name (case-insensitive, partial match).
    */
   all: publicProcedure
-    .input(z.object({ search: z.string().optional() }).optional())
+    .input(
+      z
+        .object({
+          search: z.string().optional(),
+          packageIds: z.array(z.string()).optional(),
+          addOnIds: z.array(z.string()).optional(),
+          paymentKinds: z.array(z.nativeEnum(PaymentKind)).optional(),
+        })
+        .optional(),
+    )
     .query(async ({ ctx, input }) => {
       const containsKeyword = (value: string) => ({
         contains: value,
         mode: "insensitive" as const,
       });
 
-      const where: Prisma.QuoteWhereInput = input?.search
-        ? {
-            OR: [
-              { customerName: containsKeyword(input.search) },
-              {
-                org: {
-                  is: {
-                    name: containsKeyword(input.search),
-                  },
+      const andConditions: Prisma.QuoteWhereInput[] = [];
+
+      if (input?.search && input.search.trim()) {
+        andConditions.push({
+          OR: [
+            { customerName: containsKeyword(input.search) },
+            {
+              org: {
+                is: {
+                  name: containsKeyword(input.search),
                 },
               },
-            ],
-          }
-        : {};
+            },
+          ],
+        });
+      }
+
+      if (input?.packageIds && input.packageIds.length > 0) {
+        andConditions.push({ packageId: { in: input.packageIds } });
+      }
+
+      if (input?.addOnIds && input.addOnIds.length > 0) {
+        andConditions.push({ addOns: { some: { id: { in: input.addOnIds } } } });
+      }
+
+      if (input?.paymentKinds && input.paymentKinds.length > 0) {
+        andConditions.push({ paymentKind: { in: input.paymentKinds } });
+      }
+
+      const where: Prisma.QuoteWhereInput = andConditions.length > 0 ? { AND: andConditions } : {};
 
       return ctx.db.quote.findMany({
         where,
@@ -509,7 +534,6 @@ export const quoteRouter = createTRPCRouter({
           createdById: createdBy.id,
           packageId: pkg.id,
           quantity: seats,
-          seatCount: seats,
           customerName: input.customerName,
           paymentKind: input.paymentKind,
           netDays: input.paymentKind !== PaymentKind.PREPAY ? input.netDays ?? null : null,

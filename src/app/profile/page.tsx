@@ -7,10 +7,11 @@ export default function ProfilePage() {
         Organization Profile
       </Typography>
       <Typography variant="body1" color="text.secondary">
-        This page will be the home for onboarding your organization, configuring the
-        packages and products your org uses, and managing org-specific roles and
-        permissions. Placeholder content for now.
-      </Typography>
+  This page will be the home for onboarding your organization, configuring the
+  packages and products your org uses, and managing org-specific roles and
+  permissions. Also serves as location for where admin can define approval thresholds 
+  (e.g. CRO approves &gt;15%, Finance approves &gt;40%). Placeholder content for now.
+</Typography>
     </Box>
   );
 }

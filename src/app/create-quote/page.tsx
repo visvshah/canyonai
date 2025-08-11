@@ -59,7 +59,7 @@ function ChatBubble({ message }: { message: ChatMessage }) {
 export default function CreateQuotePage() {
   const router = useRouter();
 
-  const [mode, setMode] = useState<Mode>("find");
+  const [mode, setMode] = useState<Mode>("create");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -110,13 +110,13 @@ export default function CreateQuotePage() {
       const content =
         mode === "find"
           ? [
-              "Hey! I can help you find quotes. Specify a package or add-ons to get started.",
+              "Hey! I can help you find quotes. Just give me a package name to get started. You may also specify optional add-ons and fields like seats/discount/payment.",
               pkgList ? `\nAvailable packages:\n- ${pkgList}` : "",
               addOnList ? `\nAvailable add-ons:\n- ${addOnList}` : "",
             ].filter(Boolean).join("\n")
           : [
-              "I can create a quote. Minimal: package (name or id) and customerName; add-ons optional.",
-              "If seats/discount/payment are missing, I’ll infer from similar quotes and proceed.",
+              "Hey! I can help you create a quote. Just give me a package name and customerName; add-ons optional.",
+              "If discount and payment details are missing, I’ll infer from similar quotes and proceed.",
               "Helpful optional fields: seats, discountPercent, paymentKind, netDays, prepayPercent.",
               pkgList ? `\nAvailable packages:\n- ${pkgList}` : "",
               addOnList ? `\nAvailable add-ons:\n- ${addOnList}` : "",
@@ -338,11 +338,7 @@ export default function CreateQuotePage() {
                 )}
               </Paper>
 
-              {mode === "find" && (
-                <Box display="flex" justifyContent="flex-end" sx={{ mt: 1 }}>
-                  <Button startIcon={<RestartAltIcon />} onClick={resetChat} variant="outlined" color="inherit">Restart</Button>
-                </Box>
-              )}
+              {/* bottom restart button removed per design */}
             </>
           )}
 

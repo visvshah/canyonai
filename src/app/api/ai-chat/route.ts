@@ -21,9 +21,7 @@ type OpenAIMessage = {
 export async function POST(req: Request) {
   try {
     const apiKey = env.OPENAI_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ type: "error", message: "Missing OpenAI key" }, { status: 500 });
-    }
+    if (!apiKey) return NextResponse.json({ type: "error", message: "Missing OpenAI key" }, { status: 500 });
 
     const body = (await req.json()) as { mode: Mode; messages: ClientMessage[] };
     const mode = body.mode;
@@ -40,146 +38,61 @@ export async function POST(req: Request) {
     ];
 
     const tools = buildToolsSchema(mode);
-
-    const chatRes = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        temperature: 0.2,
-        messages,
-        tools,
-        tool_choice: "auto",
-      }),
+    const first = await openAIChat(apiKey, {
+      model: "gpt-4o-mini",
+      temperature: 0.2,
+      messages,
+      tools,
+      tool_choice: "auto",
     });
 
-    if (!chatRes.ok) {
-      const txt = await safeText(chatRes);
-      return NextResponse.json({ type: "error", message: `OpenAI error: ${txt || chatRes.statusText}` }, { status: 500 });
+    const message = first?.choices?.[0]?.message ?? {};
+    const call = message?.tool_calls?.[0];
+    const fnName = call?.function?.name as string | undefined;
+    const fnArgs = safeParseJSON(call?.function?.arguments);
+
+    if (mode === "find" && fnName === "find_similar_quotes") {
+      const args = sanitizeFindArgs(fnArgs);
+      if (!args.packageId && !args.productName) {
+        return NextResponse.json({ type: "error", message: "Specify a package (id or name)." }, { status: 400 });
+      }
+      const results = await trpcCaller.quote.findSimilarQuotes(args);
+      return NextResponse.json({ type: "find_results", data: results });
     }
 
-    const chatJson = (await chatRes.json()) as any;
-    const choice = chatJson?.choices?.[0];
-    let message = choice?.message as any;
-
-
-    for (let safety = 0; safety < 4; safety++) {
-      const toolCalls = message?.tool_calls ?? [];
-      if (!Array.isArray(toolCalls) || toolCalls.length === 0) break;
-      const call = toolCalls[0]!;
-      const fnName = call.function?.name as string | undefined;
-      let fnArgs: any = {};
-      try {
-        fnArgs = call.function?.arguments ? JSON.parse(call.function.arguments) : {};
-      } catch {
-        fnArgs = {};
+    if (mode === "create" && fnName === "create_quote") {
+      const args = sanitizeCreateArgs(fnArgs);
+      if (!args.packageId && !args.productName) {
+        return NextResponse.json({ type: "assistant_message", message: "Which package? Provide name or id." });
+      }
+      if (!args.customerName) {
+        return NextResponse.json({ type: "assistant_message", message: "What is the customerName?" });
       }
 
-      if (fnName === "find_similar_quotes") {
-        const args = sanitizeFindArgs(fnArgs);
-        const hasPackage = Boolean(args.packageId) || Boolean(args.productName);
-        if (!hasPackage) {
-          return NextResponse.json({ type: "error", message: "Specify a package (id or name)." }, { status: 400 });
-        }
-        const results = await trpcCaller.quote.findSimilarQuotes(args);
-        if (mode === "find") {
-          return NextResponse.json({ type: "find_results", data: results });
-        }
-        const toolResult: OpenAIMessage = {
-          role: "tool",
-          tool_call_id: call.id,
-          content: JSON.stringify(results),
-        };
-        const nextRes = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({
-            model: "gpt-4o-mini",
-            temperature: 0.2,
-            messages: [...messages, message, toolResult],
-            tools,
-            tool_choice: "auto",
-          }),
-        });
-        if (!nextRes.ok) {
-          const txt = await safeText(nextRes);
-          return NextResponse.json({ type: "error", message: `OpenAI error: ${txt || nextRes.statusText}` }, { status: 500 });
-        }
-        const nextJson = (await nextRes.json()) as any;
-        message = nextJson?.choices?.[0]?.message;
-        // retain top-3 for UI cue if we end up creating in this request (handled later via top3)
-        continue;
+      // Always infer/normalize for MVP simplicity
+      const similar = await trpcCaller.quote.findSimilarQuotes(sanitizeFindArgs(args));
+      const top3 = similar?.results?.slice(0, 3) ?? [];
+      const deduced = await runDeductionLLM(apiKey, args, top3);
+      const finalArgs: any = { ...args, ...deduced };
+
+      if (!(Number.isInteger(finalArgs.seats) && finalArgs.seats > 0)) finalArgs.seats = 10;
+      if (typeof finalArgs.paymentKind !== "string" || !["NET", "PREPAY", "BOTH"].includes(finalArgs.paymentKind)) finalArgs.paymentKind = "PREPAY";
+      if (finalArgs.paymentKind === "NET" && !(Number.isInteger(finalArgs.netDays) && finalArgs.netDays > 0)) finalArgs.netDays = 30;
+      if (finalArgs.paymentKind === "BOTH") {
+        if (!(Number.isInteger(finalArgs.netDays) && finalArgs.netDays > 0)) finalArgs.netDays = 30;
+        if (typeof finalArgs.prepayPercent !== "number") finalArgs.prepayPercent = 50;
       }
+      if (finalArgs.paymentKind === "PREPAY" && finalArgs.prepayPercent == null) finalArgs.prepayPercent = 100;
 
-      if (fnName === "create_quote") {
-        // Only tool in Create mode. If missing non-core fields, manually run similarity+detection and then create.
-        const args = sanitizeCreateArgs(fnArgs);
-        const hasPackage = Boolean(args.packageId) || Boolean(args.productName);
-        const hasCustomer = Boolean(args.customerName);
-        if (!hasPackage || !hasCustomer) {
-          // Minimal ask only when truly core fields are missing
-          if (!hasPackage && !hasCustomer) {
-            return NextResponse.json({ type: "assistant_message", message: "Need package (name or id) and customerName to proceed." });
-          }
-          if (!hasPackage) {
-            return NextResponse.json({ type: "assistant_message", message: "Which package? Provide name or id." });
-          }
-          return NextResponse.json({ type: "assistant_message", message: "What is the customerName?" });
-        }
-
-        const seatsMissing = !(Number.isInteger(args.seats) && args.seats > 0);
-        const pkValid = typeof args.paymentKind === "string" && ["NET", "PREPAY", "BOTH"].includes(args.paymentKind);
-        const needsNetDays = args.paymentKind === "NET" && !(Number.isInteger(args.netDays) && args.netDays > 0);
-        const needsBothDeps = args.paymentKind === "BOTH" && (!(Number.isInteger(args.netDays) && args.netDays > 0) || typeof args.prepayPercent !== "number");
-        const shouldInfer = seatsMissing || !pkValid || needsNetDays || needsBothDeps;
-
-        if (!shouldInfer) {
-          try {
-            const direct = await trpcCaller.quote.createQuote(args as any);
-            if (direct?.status === "ok") {
-              return NextResponse.json({ type: "quote_created", quoteId: direct.quoteId, data: { ...direct, similarUsedTop3: null, autoFilled: false } });
-            }
-          } catch {
-            // fallthrough to inference
-          }
-        }
-
-        // Run similarity + deduction, then create. Always attempt creation even if examples are empty.
-        const similar = await trpcCaller.quote.findSimilarQuotes(sanitizeFindArgs(args));
-        const top3 = similar?.results?.slice(0, 3) ?? [];
-        const deduced = await runDeductionLLM(apiKey, args, top3);
-        const finalArgs: any = { ...args, ...deduced };
-        // Server-side safety defaults to ensure quote is created even if deduction is sparse
-        if (!(Number.isInteger(finalArgs.seats) && finalArgs.seats > 0)) finalArgs.seats = 10;
-        if (typeof finalArgs.paymentKind !== "string" || !["NET", "PREPAY", "BOTH"].includes(finalArgs.paymentKind)) {
-          finalArgs.paymentKind = "PREPAY";
-        }
-        if (finalArgs.paymentKind === "NET" && !(Number.isInteger(finalArgs.netDays) && finalArgs.netDays > 0)) {
-          finalArgs.netDays = 30;
-        }
-        if (finalArgs.paymentKind === "BOTH") {
-          if (!(Number.isInteger(finalArgs.netDays) && finalArgs.netDays > 0)) finalArgs.netDays = 30;
-          if (typeof finalArgs.prepayPercent !== "number") finalArgs.prepayPercent = 50;
-        }
-        if (finalArgs.paymentKind === "PREPAY" && finalArgs.prepayPercent == null) finalArgs.prepayPercent = 100;
-
-        const created = await trpcCaller.quote.createQuote(finalArgs);
-        if (created?.status === "ok") {
-          return NextResponse.json({ type: "quote_created", quoteId: created.quoteId, data: { ...created, similarUsedTop3: top3, autoFilled: true } });
-        }
-
-        // If still error, respond concisely with instruction-free prompt
-        return NextResponse.json({ type: "assistant_message", message: "Unable to create with inferred values. Provide package and customer if missing." });
+      const created = await trpcCaller.quote.createQuote(finalArgs);
+      if (created?.status === "ok") {
+        return NextResponse.json({ type: "quote_created", quoteId: created.quoteId, data: { ...created, similarUsedTop3: top3, autoFilled: true } });
       }
-
-      // Unknown tool; break
-      break;
+      return NextResponse.json({ type: "assistant_message", message: "Unable to create quote. Provide package and customer if missing." });
     }
 
-      return NextResponse.json({ type: "assistant_message", message: message?.content });
+    // Default: return the assistant content if no tool was called
+    return NextResponse.json({ type: "assistant_message", message: message?.content });
   } catch (err: any) {
     return NextResponse.json({ type: "error", message: err?.message ?? "Unexpected error" }, { status: 500 });
   }
@@ -294,28 +207,28 @@ function buildToolsSchema(mode: Mode) {
 
 function sanitizeFindArgs(input: any) {
   const args: any = {};
-  if (typeof input.packageId === "string" && input.packageId.trim()) args.packageId = input.packageId.trim();
-  if (typeof input.productName === "string" && input.productName.trim()) args.productName = input.productName.trim();
-  if (Number.isInteger(input.seats) && input.seats > 0) args.seats = input.seats;
-  if (typeof input.discountPercent === "number") args.discountPercent = clamp(input.discountPercent, 0, 100);
-  if (Array.isArray(input.addOnIds)) args.addOnIds = input.addOnIds.filter((x: any) => typeof x === "string");
-  if (Array.isArray(input.addOnNames)) args.addOnNames = input.addOnNames.filter((x: any) => typeof x === "string");
-  if (typeof input.paymentKind === "string" && ["NET", "PREPAY", "BOTH"].includes(input.paymentKind)) args.paymentKind = input.paymentKind as PaymentKind;
+  if (typeof input?.packageId === "string" && input.packageId.trim()) args.packageId = input.packageId.trim();
+  if (typeof input?.productName === "string" && input.productName.trim()) args.productName = input.productName.trim();
+  if (Number.isInteger(input?.seats) && input.seats > 0) args.seats = input.seats;
+  if (typeof input?.discountPercent === "number") args.discountPercent = clamp(input.discountPercent, 0, 100);
+  if (Array.isArray(input?.addOnIds)) args.addOnIds = input.addOnIds.filter((x: any) => typeof x === "string");
+  if (Array.isArray(input?.addOnNames)) args.addOnNames = input.addOnNames.filter((x: any) => typeof x === "string");
+  if (typeof input?.paymentKind === "string" && ["NET", "PREPAY", "BOTH"].includes(input.paymentKind)) args.paymentKind = input.paymentKind as PaymentKind;
   return args;
 }
 
 function sanitizeCreateArgs(input: any) {
   const args: any = {};
-  if (typeof input.packageId === "string" && input.packageId.trim()) args.packageId = input.packageId.trim();
-  if (typeof input.productName === "string" && input.productName.trim()) args.productName = input.productName.trim();
-  if (Number.isInteger(input.seats) && input.seats > 0) args.seats = input.seats;
-  if (typeof input.discountPercent === "number") args.discountPercent = clamp(input.discountPercent, 0, 100);
-  if (Array.isArray(input.addOnIds)) args.addOnIds = input.addOnIds.filter((x: any) => typeof x === "string");
-  if (Array.isArray(input.addOnNames)) args.addOnNames = input.addOnNames.filter((x: any) => typeof x === "string");
-  if (typeof input.customerName === "string" && input.customerName.trim()) args.customerName = input.customerName.trim();
-  if (typeof input.paymentKind === "string" && ["NET", "PREPAY", "BOTH"].includes(input.paymentKind)) args.paymentKind = input.paymentKind as PaymentKind;
-  if (Number.isInteger(input.netDays) && input.netDays > 0) args.netDays = input.netDays;
-  if (typeof input.prepayPercent === "number") args.prepayPercent = clamp(input.prepayPercent, 0, 100);
+  if (typeof input?.packageId === "string" && input.packageId.trim()) args.packageId = input.packageId.trim();
+  if (typeof input?.productName === "string" && input.productName.trim()) args.productName = input.productName.trim();
+  if (Number.isInteger(input?.seats) && input.seats > 0) args.seats = input.seats;
+  if (typeof input?.discountPercent === "number") args.discountPercent = clamp(input.discountPercent, 0, 100);
+  if (Array.isArray(input?.addOnIds)) args.addOnIds = input.addOnIds.filter((x: any) => typeof x === "string");
+  if (Array.isArray(input?.addOnNames)) args.addOnNames = input.addOnNames.filter((x: any) => typeof x === "string");
+  if (typeof input?.customerName === "string" && input.customerName.trim()) args.customerName = input.customerName.trim();
+  if (typeof input?.paymentKind === "string" && ["NET", "PREPAY", "BOTH"].includes(input.paymentKind)) args.paymentKind = input.paymentKind as PaymentKind;
+  if (Number.isInteger(input?.netDays) && input.netDays > 0) args.netDays = input.netDays;
+  if (typeof input?.prepayPercent === "number") args.prepayPercent = clamp(input.prepayPercent, 0, 100);
   return args;
 }
 
@@ -365,21 +278,17 @@ async function runDeductionLLM(apiKey: string, partialInput: any, examples: any[
   const system = `You fill missing quote fields concisely based on patterns in examples. Output STRICT JSON only with keys: seats (int), discountPercent (0-100), paymentKind (NET|PREPAY|BOTH), netDays (int|null), prepayPercent (0-100|null). If PREPAY and prepayPercent missing, omit it.`;
   const user = JSON.stringify({ partialInput, examples });
   try {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        temperature: 0.1,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: `Fill missing fields. Return JSON only. Input: ${user}` },
-        ],
-      }),
+    const data = await openAIChat(apiKey, {
+      model: "gpt-4o-mini",
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: `Fill missing fields. Input: ${user}` },
+      ],
     });
-    const data = (await res.json()) as any;
     const text = data?.choices?.[0]?.message?.content ?? "{}";
-    const parsed = JSON.parse(text);
+    const parsed = safeParseJSON(text);
     const out: any = {};
     if (Number.isInteger(parsed.seats) && parsed.seats > 0) out.seats = parsed.seats;
     if (typeof parsed.discountPercent === "number") out.discountPercent = clamp(parsed.discountPercent, 0, 100);
@@ -387,6 +296,29 @@ async function runDeductionLLM(apiKey: string, partialInput: any, examples: any[
     if (Number.isInteger(parsed.netDays) && parsed.netDays > 0) out.netDays = parsed.netDays;
     if (typeof parsed.prepayPercent === "number") out.prepayPercent = clamp(parsed.prepayPercent, 0, 100);
     return out;
+  } catch {
+    return {};
+  }
+}
+
+// --- Minimal helpers for MVP ---
+async function openAIChat(apiKey: string, payload: any): Promise<any> {
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const txt = await safeText(res);
+    throw new Error(txt || res.statusText);
+  }
+  return res.json();
+}
+
+function safeParseJSON(input: unknown): any {
+  if (typeof input !== "string" || !input.trim()) return {};
+  try {
+    return JSON.parse(input);
   } catch {
     return {};
   }

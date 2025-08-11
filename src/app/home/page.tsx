@@ -80,16 +80,11 @@ export default function HomePage() {
     { staleTime: 0 },
   );
 
-  // Recent quotes (limit client-side)
-  const { data: allQuotes, isLoading: allLoading } = api.quote.all.useQuery();
-  const recentQuotes = useMemo(() => (allQuotes ?? []).slice(0, 6), [allQuotes]);
+  // No recent quotes section per design simplification
 
   const approveMutation = api.quote.approveNextForRole.useMutation({
     onSuccess: async () => {
-      await Promise.all([
-        utils.quote.pendingByRole.invalidate({ role: selectedRole }),
-        utils.quote.all.invalidate(),
-      ]);
+      await utils.quote.pendingByRole.invalidate({ role: selectedRole });
     },
   });
 
@@ -178,10 +173,8 @@ export default function HomePage() {
 
         <Divider flexItem sx={{ opacity: 0.2 }} />
 
-        {/* Approval Queue + Recent Quotes */}
-        <Box display="grid" gap={3} sx={{ gridTemplateColumns: { xs: "1fr", lg: "1.2fr 1fr" } }}>
-          {/* Left: Your approval queue */}
-          <Card variant="outlined">
+        {/* Approval Queue (full width) */}
+        <Card variant="outlined">
             <CardHeader
               title={
                 <Stack direction="row" alignItems="center" spacing={1}>
@@ -267,46 +260,6 @@ export default function HomePage() {
               )}
             </CardContent>
           </Card>
-
-          {/* Right: Recent quotes */}
-          <Card variant="outlined">
-            <CardHeader title={<Typography variant="h6" fontWeight={700}>Recent Quotes</Typography>} />
-            <CardContent>
-              {allLoading ? (
-                <Box display="flex" justifyContent="center" py={3}><CircularProgress size={22} /></Box>
-              ) : recentQuotes.length === 0 ? (
-                <Typography color="text.secondary">No recent quotes.</Typography>
-              ) : (
-                <TableContainer component={Paper} variant="outlined" sx={{ background: "transparent" }}>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Customer</TableCell>
-                        <TableCell>Status</TableCell>
-                        <TableCell>Total</TableCell>
-                        <TableCell>Created</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {recentQuotes.map((q) => (
-                        <TableRow key={q.id} hover sx={{ cursor: "pointer" }} onClick={() => router.push(`/quotes/${q.id}`)}>
-                          <TableCell>{q.customerName}</TableCell>
-                          <TableCell><Chip label={q.status} size="small" /></TableCell>
-                          <TableCell>{formatCurrency(q.total as unknown as number)}</TableCell>
-                          <TableCell>{format(new Date(q.createdAt), "MMM d, yyyy")}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              )}
-
-              <Stack direction="row" justifyContent="flex-end" mt={1}>
-                <Button component={Link} href="/quotes" size="small">View all quotes</Button>
-              </Stack>
-            </CardContent>
-          </Card>
-        </Box>
       </Box>
     </main>
   );
