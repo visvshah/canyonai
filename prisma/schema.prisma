@@ -85,6 +85,7 @@ enum QuoteStatus {
 }
 
 enum ApprovalStatus {
+    Waiting
     Pending
     Approved
     Rejected
@@ -133,8 +134,7 @@ model Quote {
     createdBy       User          @relation("UserCreatedQuotes", fields: [createdById], references: [id])
     packageId       String
     package         Package       @relation(fields: [packageId], references: [id])
-    quantity        Int
-    seatCount       Int           @default(0)
+    quantity        Int           @default(0)
     addOns          AddOn[]
     customerName    String
     paymentKind     PaymentKind
@@ -167,8 +167,8 @@ model ApprovalStep {
     persona     Role
     approverId  String?
     approver    User?           @relation("UserApprovalSteps", fields: [approverId], references: [id])
-    status      ApprovalStatus  @default(Pending)
+    status      ApprovalStatus  @default(Waiting)
     approvedAt  DateTime?
-    createdAd   DateTime        @default(now())
-    updatedAd   DateTime        @updatedAt
+    createdAt   DateTime        @default(now())
+    updatedAt   DateTime?
 }

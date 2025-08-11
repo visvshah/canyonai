@@ -4,16 +4,10 @@ import { Prisma, Role, ApprovalStatus, QuoteStatus, PaymentKind } from "@prisma/
 import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
 import { env } from "~/env";
 
-// Centralized status updater: computes Quote.status from its workflow steps
-// Rules:
-// - Any step Rejected => Quote Rejected
-// - Else any step Pending => Quote Pending
-// - Else (all Approved, or no steps) => Quote Approved
 const updateQuoteStatus = async (
   tx: Prisma.TransactionClient,
   quoteId: string,
 ) => {
-  // Do not override Sold quotes
   const existing = await tx.quote.findUnique({ where: { id: quoteId }, select: { status: true } });
   if (existing?.status === QuoteStatus.Sold) {
     return QuoteStatus.Sold;
@@ -41,33 +35,135 @@ const updateQuoteStatus = async (
   return newStatus;
 };
 
+const recomputeWorkflowGating = async (
+  tx: Prisma.TransactionClient,
+  quoteId: string,
+) => {
+  const workflow = await tx.approvalWorkflow.findUnique({
+    where: { quoteId },
+    include: { steps: { orderBy: { stepOrder: "asc" } } },
+  });
+  if (!workflow) return;
+  const steps = workflow.steps;
+  if (steps.length === 0) return;
+  if (steps.some((s) => s.status === ApprovalStatus.Rejected)) return;
+  const firstNonApprovedIndex = steps.findIndex((s) => s.status !== ApprovalStatus.Approved);
+  if (firstNonApprovedIndex === -1) return;
+  const now = new Date();
+  for (let i = 0; i < steps.length; i++) {
+    const st = steps[i]!;
+    if (st.status === ApprovalStatus.Approved) continue;
+    const desired = i === firstNonApprovedIndex ? ApprovalStatus.Pending : ApprovalStatus.Waiting;
+    if (st.status !== desired) {
+      if (desired === ApprovalStatus.Pending) {
+        await tx.approvalStep.update({ where: { id: st.id }, data: { status: desired, updatedAt: now } });
+      } else {
+        await tx.approvalStep.update({ where: { id: st.id }, data: { status: desired, updatedAt: null } });
+      }
+    } else if (desired === ApprovalStatus.Pending && !st.updatedAt) {
+      await tx.approvalStep.update({ where: { id: st.id }, data: { updatedAt: now } });
+    }
+  }
+};
+
 export const quoteRouter = createTRPCRouter({
+  catalog: publicProcedure.query(async ({ ctx }) => {
+    const sessionUserId = ctx.session?.user?.id ?? null;
+    let orgId: string | undefined;
+    if (sessionUserId) {
+      orgId = (await ctx.db.user.findUnique({ where: { id: sessionUserId }, select: { orgId: true } }))?.orgId ?? undefined;
+    }
+    if (!orgId) {
+      orgId = (await ctx.db.org.findFirst({ select: { id: true } }))?.id;
+    }
+    const [packages, addOns] = await Promise.all([
+      ctx.db.package.findMany({ where: orgId ? { orgId } : undefined, select: { id: true, name: true } , orderBy: { name: "asc" } }),
+      ctx.db.addOn.findMany({ where: orgId ? { orgId } : undefined, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    ]);
+    return { packages, addOns } as const;
+  }),
+  /**
+   * Fetch quotes whose next pending step persona matches the provided role.
+   * "Next pending" is defined as the first step in order with status Pending.
+   */
+  pendingByRole: publicProcedure
+    .input(z.object({ role: z.nativeEnum(Role) }))
+    .query(async ({ ctx, input }) => {
+      const quotes = await ctx.db.quote.findMany({
+        where: { status: QuoteStatus.Pending },
+        include: {
+          org: true,
+          package: true,
+          approvalWorkflow: {
+            include: {
+              steps: {
+                include: { approver: true },
+                orderBy: { stepOrder: "asc" },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      return quotes.filter((q) => {
+        const steps = q.approvalWorkflow?.steps ?? [];
+        const firstPending = steps.find((s) => s.status === ApprovalStatus.Pending);
+        return firstPending?.persona === input.role;
+      });
+    }),
+
   /**
    * Fetch all quotes. Optionally filter by a search string that matches the
    * customer name or organisation name (case-insensitive, partial match).
    */
   all: publicProcedure
-    .input(z.object({ search: z.string().optional() }).optional())
+    .input(
+      z
+        .object({
+          search: z.string().optional(),
+          packageIds: z.array(z.string()).optional(),
+          addOnIds: z.array(z.string()).optional(),
+          paymentKinds: z.array(z.nativeEnum(PaymentKind)).optional(),
+        })
+        .optional(),
+    )
     .query(async ({ ctx, input }) => {
       const containsKeyword = (value: string) => ({
         contains: value,
         mode: "insensitive" as const,
       });
 
-      const where: Prisma.QuoteWhereInput = input?.search
-        ? {
-            OR: [
-              { customerName: containsKeyword(input.search) },
-              {
-                org: {
-                  is: {
-                    name: containsKeyword(input.search),
-                  },
+      const andConditions: Prisma.QuoteWhereInput[] = [];
+
+      if (input?.search && input.search.trim()) {
+        andConditions.push({
+          OR: [
+            { customerName: containsKeyword(input.search) },
+            {
+              org: {
+                is: {
+                  name: containsKeyword(input.search),
                 },
               },
-            ],
-          }
-        : {};
+            },
+          ],
+        });
+      }
+
+      if (input?.packageIds && input.packageIds.length > 0) {
+        andConditions.push({ packageId: { in: input.packageIds } });
+      }
+
+      if (input?.addOnIds && input.addOnIds.length > 0) {
+        andConditions.push({ addOns: { some: { id: { in: input.addOnIds } } } });
+      }
+
+      if (input?.paymentKinds && input.paymentKinds.length > 0) {
+        andConditions.push({ paymentKind: { in: input.paymentKinds } });
+      }
+
+      const where: Prisma.QuoteWhereInput = andConditions.length > 0 ? { AND: andConditions } : {};
 
       return ctx.db.quote.findMany({
         where,
@@ -120,6 +216,41 @@ export const quoteRouter = createTRPCRouter({
     }),
     
   /**
+   * Approve the next pending step for a quote as a given role.
+   * Fails if the next pending step persona does not match the provided role.
+   */
+  approveNextForRole: publicProcedure
+    .input(z.object({ quoteId: z.string(), role: z.nativeEnum(Role) }))
+    .mutation(async ({ ctx, input }) => {
+      const { quoteId, role } = input;
+      return ctx.db.$transaction(async (tx) => {
+        const workflow = await tx.approvalWorkflow.findUnique({
+          where: { quoteId },
+          include: { steps: { orderBy: { stepOrder: "asc" } } },
+        });
+        if (!workflow) {
+          throw new Error("Approval workflow not found for quote");
+        }
+        const nextPending = workflow.steps.find((s) => s.status === ApprovalStatus.Pending);
+        if (!nextPending) {
+          throw new Error("No pending approval step for this quote");
+        }
+        if (nextPending.persona !== role) {
+          throw new Error("Next pending step does not match the selected role");
+        }
+
+        await tx.approvalStep.update({
+          where: { id: nextPending.id },
+          data: { status: ApprovalStatus.Approved, approvedAt: new Date() },
+        });
+
+        await recomputeWorkflowGating(tx, quoteId);
+        const newStatus = await updateQuoteStatus(tx, quoteId);
+        return { success: true, newStatus } as const;
+      });
+    }),
+    
+  /**
    * Replace the entire workflow for a quote with the provided ordered steps, then recompute quote status.
    */
   setWorkflow: publicProcedure
@@ -141,7 +272,6 @@ export const quoteRouter = createTRPCRouter({
     .mutation(async ({ ctx, input }) => {
       const { quoteId, steps } = input;
       await ctx.db.$transaction(async (tx) => {
-        // Ensure workflow exists
         const existing = await tx.approvalWorkflow.findUnique({
           where: { quoteId },
           include: { steps: true },
@@ -150,10 +280,9 @@ export const quoteRouter = createTRPCRouter({
           ? existing.id
           : (await tx.approvalWorkflow.create({ data: { quoteId } })).id;
 
-        // Delete existing steps
         await tx.approvalStep.deleteMany({ where: { approvalWorkflowId: workflowId } });
 
-        // Insert new steps in order
+        const now = new Date();
         for (let i = 0; i < steps.length; i++) {
           const s = steps[i]!;
           let approverId: string | null = null;
@@ -167,12 +296,13 @@ export const quoteRouter = createTRPCRouter({
               stepOrder: i + 1,
               persona: s.persona,
               approverId,
-              status: s.status ?? ApprovalStatus.Pending,
+              status: s.status ?? ApprovalStatus.Waiting,
+              updatedAt: s.status === ApprovalStatus.Pending ? now : null,
             },
           });
         }
 
-        // Update quote status based on new workflow
+        await recomputeWorkflowGating(tx, quoteId);
         await updateQuoteStatus(tx, quoteId);
       });
       return { success: true };
@@ -194,14 +324,12 @@ export const quoteRouter = createTRPCRouter({
           addOnIds: z.array(z.string()).optional().default([]),
           addOnNames: z.array(z.string()).optional().default([]),
           paymentKind: z.nativeEnum(PaymentKind).optional(),
-          recentDays: z.number().int().min(1).max(3650).default(365),
-          limit: z.number().int().min(1).max(50).default(10),
         })
         .default({}),
     )
     .query(async ({ ctx, input }) => {
       const params = input;
-      const recentThreshold = new Date(Date.now() - (params.recentDays ?? 365) * 24 * 60 * 60 * 1000);
+      const recentThreshold = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
 
       const candidates = await ctx.db.quote.findMany({
         where: {
@@ -213,7 +341,7 @@ export const quoteRouter = createTRPCRouter({
           addOns: true,
         },
         orderBy: { createdAt: "desc" },
-        take: 200, // cap candidates for scoring
+        take: 200,
       });
 
       const normalizedProduct = (params.productName ?? "").trim().toLowerCase();
@@ -221,13 +349,12 @@ export const quoteRouter = createTRPCRouter({
       const addOnIdSet = new Set(params.addOnIds ?? []);
 
       const seats = params.seats;
-      const seatBand = seats != null ? Math.max(2, Math.round(seats * 0.2)) : null;
+      const seatBandAbs = 20;
 
       const scored = candidates.map((q) => {
         let score = 0;
         const reasons: string[] = [];
 
-        // Package / product matching
         if (params.packageId && q.packageId === params.packageId) {
           score += 4;
           reasons.push("same packageId");
@@ -242,34 +369,33 @@ export const quoteRouter = createTRPCRouter({
           }
         }
 
-        // Seats proximity
-        if (seats != null && seatBand != null) {
+        if (seats != null) {
           const diff = Math.abs(q.quantity - seats);
           if (diff === 0) {
             score += 3;
             reasons.push("exact seat count");
-          } else if (diff <= Math.max(1, Math.round((seatBand * 0.5)))) {
+          } else if (diff <= 10) {
             score += 2;
             reasons.push("close seat count");
-          } else if (diff <= seatBand) {
+          } else if (diff <= seatBandAbs) {
             score += 1;
             reasons.push("within seat band");
           }
         }
 
-        // Discount proximity
         if (params.discountPercent != null) {
-          const diff = Math.abs(Number(q.discountPercent) - params.discountPercent);
-          if (diff <= 2) {
+          const provided = params.discountPercent;
+          const diff = Math.abs(Number(q.discountPercent) - provided);
+          const allowed = Math.max(1, Math.round(provided * 0.1));
+          if (diff === 0) {
             score += 2;
-            reasons.push("discount ±2%");
-          } else if (diff <= 5) {
+            reasons.push("exact discount");
+          } else if (diff <= allowed) {
             score += 1;
-            reasons.push("discount ±5%");
+            reasons.push("discount in range");
           }
         }
 
-        // Add-on overlap
         if (addOnIdSet.size > 0 || normalizedAddOnNames.length > 0) {
           let overlap = 0;
           for (const ao of q.addOns) {
@@ -282,13 +408,11 @@ export const quoteRouter = createTRPCRouter({
           }
         }
 
-        // Payment kind
         if (params.paymentKind && q.paymentKind === params.paymentKind) {
           score += 1;
           reasons.push("same payment kind");
         }
 
-        // Recency booster (last 90 days)
         const daysAgo = (Date.now() - q.createdAt.getTime()) / (1000 * 60 * 60 * 24);
         if (daysAgo <= 90) {
           score += 1;
@@ -301,7 +425,7 @@ export const quoteRouter = createTRPCRouter({
       const ranked = scored
         .filter((s) => s.score > 0)
         .sort((a, b) => (b.score - a.score) || (b.q.createdAt.getTime() - a.q.createdAt.getTime()))
-        .slice(0, params.limit ?? 10)
+        .slice(0, 10)
         .map(({ q, score, reasons }) => ({
           quoteId: q.id,
           createdAt: q.createdAt,
@@ -324,7 +448,7 @@ export const quoteRouter = createTRPCRouter({
 
   /**
    * Create a new quote from structured inputs, resolve package/add-ons, compute pricing, and
-   * generate an HTML contract. Falls back to a local template if no LLM is available.
+   * generate an HTML contract.
    */
   createQuote: publicProcedure
     .input(
@@ -342,7 +466,6 @@ export const quoteRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Resolve user and org (prefer session user)
       const sessionUserId = ctx.session?.user?.id ?? null;
       const createdBy = sessionUserId
         ? await ctx.db.user.findUnique({ where: { id: sessionUserId } })
@@ -356,7 +479,6 @@ export const quoteRouter = createTRPCRouter({
         return { status: "error", error: { code: "no_org", message: "No organisation found to assign to the new quote." } } as const;
       }
 
-      // Resolve package (prefer packageId)
       let pkg = null as null | { id: string; name: string; unitPrice: Prisma.Decimal };
       if (input.packageId) {
         pkg = await ctx.db.package.findFirst({ where: { id: input.packageId, orgId } });
@@ -372,7 +494,6 @@ export const quoteRouter = createTRPCRouter({
         return { status: "error", error: { code: "package_not_found", message: "Could not resolve package. Provide a valid packageId or productName." } } as const;
       }
 
-      // Resolve add-ons (by id and/or fuzzy name)
       const addOnIdSet = new Set(input.addOnIds ?? []);
       if (input.addOnNames && input.addOnNames.length > 0) {
         const allAddOns = await ctx.db.addOn.findMany({ where: { orgId } });
@@ -388,13 +509,11 @@ export const quoteRouter = createTRPCRouter({
         ? await ctx.db.addOn.findMany({ where: { id: { in: addOnIds }, orgId } })
         : [];
 
-      // Validate payment fields coherence
       if (input.paymentKind === PaymentKind.NET) {
         if (input.netDays == null) {
           return { status: "error", error: { code: "validation_error", message: "netDays is required when paymentKind is NET." } } as const;
         }
       } else if (input.paymentKind === PaymentKind.PREPAY) {
-        // default 100% prepay if not provided
       } else if (input.paymentKind === PaymentKind.BOTH) {
         if (input.netDays == null || input.prepayPercent == null) {
           return { status: "error", error: { code: "validation_error", message: "netDays and prepayPercent are required when paymentKind is BOTH." } } as const;
@@ -415,7 +534,6 @@ export const quoteRouter = createTRPCRouter({
           createdById: createdBy.id,
           packageId: pkg.id,
           quantity: seats,
-          seatCount: seats,
           customerName: input.customerName,
           paymentKind: input.paymentKind,
           netDays: input.paymentKind !== PaymentKind.PREPAY ? input.netDays ?? null : null,
@@ -431,7 +549,6 @@ export const quoteRouter = createTRPCRouter({
         },
       });
 
-      // Generate contract HTML
       const contractInput = {
         quoteId: quote.id,
         customerName: quote.customerName,
@@ -452,23 +569,7 @@ export const quoteRouter = createTRPCRouter({
         try {
           const apiKey = env.OPENAI_KEY;
           if (!apiKey) return null;
-          const prompt = `Create a concise, professional SaaS order form as minimal HTML only (no markdown). Include: Quote ID ${ci.quoteId}, Customer ${ci.customerName}, Package ${ci.productName} x ${ci.seats} seats, Add-ons ${ci.addOns.join(", ") || "None"}, Subtotal $${ci.subtotal.toFixed ? ci.subtotal.toFixed(2) : ci.subtotal}, Discount ${ci.discountPercent}%, Total $${ci.total.toFixed ? ci.total.toFixed(2) : ci.total}, Payment ${ci.paymentKind}${ci.netDays ? ", Net " + ci.netDays + " days" : ""}${ci.prepayPercent ? ", Prepay " + ci.prepayPercent + "%" : ""}. Use simple inline styles, and headings for sections.`;
-
-          // Prefer Responses API when available; fall back to Chat Completions
-          const responsesRes = await fetch("https://api.openai.com/v1/responses", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-            body: JSON.stringify({
-              model: "gpt-4o-mini",
-              input: prompt,
-              temperature: 0.3,
-            }),
-          });
-          if (responsesRes.ok) {
-            const data = (await responsesRes.json()) as any;
-            const out = data?.output_text ?? data?.content?.[0]?.text ?? null;
-            if (out && typeof out === "string") return out.trim();
-          }
+          const prompt = `Create a concise, professional software subscription contract in plain text (no markdown, no HTML). Details: Contract/Quote ID ${ci.quoteId}, Customer ${ci.customerName}, Product ${ci.productName} x ${ci.seats} seats, Add-ons ${ci.addOns.join(", ") || "None"}, Subtotal $${ci.subtotal.toFixed ? ci.subtotal.toFixed(2) : ci.subtotal}, Discount ${ci.discountPercent}%, Total $${ci.total.toFixed ? ci.total.toFixed(2) : ci.total}, Payment ${ci.paymentKind}${ci.netDays ? ", Net " + ci.netDays + " days" : ""}${ci.prepayPercent ? ", Prepay " + ci.prepayPercent + "%" : ""}. Use clear section headings like: Parties, Services, Commercial Terms, Payment Terms, Acceptance. Our company is Zoom Communications. Output raw plain text only.`;
 
           const chatRes = await fetch("https://api.openai.com/v1/chat/completions", {
             method: "POST",
@@ -476,7 +577,7 @@ export const quoteRouter = createTRPCRouter({
             body: JSON.stringify({
               model: "gpt-4o-mini",
               messages: [
-                { role: "system", content: "You generate short, production-ready HTML contracts. Output raw HTML only." },
+                { role: "system", content: "You generate short, production-ready contracts." },
                 { role: "user", content: prompt },
               ],
               temperature: 0.3,
@@ -487,9 +588,7 @@ export const quoteRouter = createTRPCRouter({
             const out = data?.choices?.[0]?.message?.content ?? null;
             if (out && typeof out === "string") return out.trim();
           }
-        } catch {
-          // ignore and fallback
-        }
+        } catch {}
         return null;
       }
 
@@ -497,7 +596,6 @@ export const quoteRouter = createTRPCRouter({
 
       await ctx.db.quote.update({ where: { id: quote.id }, data: { documentHtml: contractText } });
 
-      // Auto-generate an approval workflow for the new quote
       function buildApprovalChain(discountPercent: number, paymentKind: PaymentKind, netDays: number | null): Role[] {
         const roles: Role[] = [Role.AE];
         if (discountPercent > 0 && discountPercent <= 15) {
@@ -517,14 +615,11 @@ export const quoteRouter = createTRPCRouter({
 
       const chain = buildApprovalChain(discountPctNum, input.paymentKind, input.netDays ?? null);
       await ctx.db.$transaction(async (tx) => {
-        // Ensure workflow exists
         const existingWf = await tx.approvalWorkflow.findUnique({ where: { quoteId: quote.id } });
         const workflowId = existingWf?.id ?? (await tx.approvalWorkflow.create({ data: { quoteId: quote.id } })).id;
 
-        // Reset steps
         await tx.approvalStep.deleteMany({ where: { approvalWorkflowId: workflowId } });
 
-        // Create AE step as approved by the creator (if available)
         const approverId = createdBy.id ?? null;
         await tx.approvalStep.create({
           data: {
@@ -537,7 +632,6 @@ export const quoteRouter = createTRPCRouter({
           },
         });
 
-        // Remaining steps pending
         let order = 2;
         for (const persona of chain.slice(1)) {
           await tx.approvalStep.create({
@@ -545,13 +639,13 @@ export const quoteRouter = createTRPCRouter({
               approvalWorkflowId: workflowId,
               stepOrder: order,
               persona,
-              status: ApprovalStatus.Pending,
+              status: ApprovalStatus.Waiting,
             },
           });
           order += 1;
         }
 
-        // Recompute the quote status from its steps
+        await recomputeWorkflowGating(tx, quote.id);
         await updateQuoteStatus(tx, quote.id);
       });
 

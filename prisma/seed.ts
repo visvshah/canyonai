@@ -168,24 +168,24 @@ async function main() {
     let order = 1;
     for (let i = 0; i < chain.length; i++) {
       const persona = chain[i]!;
-      let status: ApprovalStatus = ApprovalStatus.Pending;
+      let status: ApprovalStatus = ApprovalStatus.Waiting;
       let approvedAt: Date | null = null;
 
       if (i === 0) {
-        status = ApprovalStatus.Approved; // AE auto-approves as submitter
+        // AE auto-approves as submitter
+        status = ApprovalStatus.Approved;
         approvedAt = minutesAfter(stepBaseTime, 1);
       } else if (s.status === QuoteStatus.Approved) {
+        // Fully approved quotes: mark all steps approved in sequence
         status = ApprovalStatus.Approved;
         approvedAt = minutesAfter(stepBaseTime, i + 1);
       } else if (s.status === QuoteStatus.Rejected && i === 1) {
+        // Second step rejected for rejected scenarios
         status = ApprovalStatus.Rejected;
         approvedAt = minutesAfter(stepBaseTime, i + 1);
       } else if (s.status === QuoteStatus.Pending) {
-        if (i === 1) {
-          status = ApprovalStatus.Pending;
-        } else if (i > 1) {
-          status = ApprovalStatus.Pending;
-        }
+        // Default waiting for all non-approved steps; first non-approved becomes pending below after create
+        status = ApprovalStatus.Waiting;
       }
 
       await prisma.approvalStep.create({
@@ -205,9 +205,151 @@ async function main() {
       }
       order += 1;
     }
+
+    // For pending quotes, ensure gating: first non-approved step should be Pending, others Waiting
+    if (s.status === QuoteStatus.Pending) {
+      const steps = await prisma.approvalStep.findMany({ where: { approvalWorkflowId: workflowId }, orderBy: { stepOrder: "asc" } });
+      const hasRejected = steps.some((st) => st.status === ApprovalStatus.Rejected);
+      if (!hasRejected) {
+        let firstNonApprovedIndex = steps.findIndex((st) => st.status !== ApprovalStatus.Approved);
+        for (let i = 0; i < steps.length; i++) {
+          const st = steps[i]!;
+          if (st.status === ApprovalStatus.Approved || st.status === ApprovalStatus.Rejected) continue;
+          const isFirstNonApproved = i === firstNonApprovedIndex;
+          const desired = isFirstNonApproved ? ApprovalStatus.Pending : ApprovalStatus.Waiting;
+          if (st.status !== desired) {
+            const data: Prisma.ApprovalStepUpdateInput = isFirstNonApproved
+              ? { status: desired, updatedAt: minutesAfter(stepBaseTime, i + 1) }
+              : { status: desired, updatedAt: null };
+            await prisma.approvalStep.update({ where: { id: st.id }, data });
+          }
+        }
+      }
+    }
   }
 
-  console.log("Seeded Zoom-style demo data ✔️");
+  // ---------------------------------------------------------------------------
+  // Coverage quotes: ensure at least one APPROVED quote for every
+  // (package × add-on) combination. Add on top of existing scenarios.
+  // ---------------------------------------------------------------------------
+  const coverageCustomerNames = [
+    "Altair Analytics", "Beacon Solutions", "Catalyst Labs", "Delta Ventures", "Evergreen Systems",
+    "Fathom Networks", "Granite Partners", "Harbor Dynamics", "Ionix Group", "Juniper Holdings",
+    "Keystone Digital", "Lighthouse Media", "Monarch Retail", "Northstar Logistics", "Orchid Health",
+    "Pinnacle Security", "Quasar Energy", "Redwood Finance", "Sequoia Ventures", "Titan Industrial",
+    "Umbra Technologies", "Vanguard Studios", "Willow Education", "Xenon Robotics", "Yellow Brick Apps",
+    "Zephyr Travel", "Aurora Biotech", "Bluebird Telecom", "Copperfield Foods", "Dynamo Fitness",
+    "Echo Entertainment", "Forge Manufacturing", "Glacier Insurance", "Horizon Mobility", "Indigo Travel",
+    "Jasper Software", "Kite Aerospace", "Lyric Music", "Mosaic Housing", "Nimbus Cloudworks",
+    "Opal Financial", "Prairie Agri", "Quartz Mining", "Riverstone Hotels", "Sapphire Sports",
+    "Timberline Outdoors", "Uptown Services", "Veridian Pharma", "Wildflower Cosmetics", "Xylem Water",
+    "Yukon Shipping", "Zenith Data", "Atlas Robotics", "Bridgepoint Health", "Cobalt Systems",
+    "Driftwood Media", "Element Electric", "Frontier Legal", "Garnet Retail", "Helix Bio",
+  ];
+  let covIndex = 0;
+  for (const pkg of pkgData) {
+    for (const addon of addOnData) {
+      const id = `cov_${pkg.id}_${addon.id}`;
+      const quantityCycle = [3, 5, 10, 20, 50, 75, 120];
+      const discountCycle = [0, 3, 5, 7, 10, 12, 15];
+      const paymentCycle = [PaymentKind.NET, PaymentKind.PREPAY, PaymentKind.BOTH];
+
+      const quantity = quantityCycle[covIndex % quantityCycle.length]!;
+      const discountPercent = discountCycle[covIndex % discountCycle.length]!;
+      const paymentKind = paymentCycle[covIndex % paymentCycle.length]!;
+      const netDaysOptions = [15, 30, 45, 60];
+      const prepayOptions = [100, 70, 50];
+      const netDays = paymentKind === PaymentKind.NET || paymentKind === PaymentKind.BOTH ? netDaysOptions[covIndex % netDaysOptions.length]! : null;
+      const prepayPercent = paymentKind === PaymentKind.PREPAY || paymentKind === PaymentKind.BOTH ? decimal(prepayOptions[covIndex % prepayOptions.length]!) : null;
+
+      const scenario: QuoteScenario = {
+        id,
+        packageId: pkg.id,
+        quantity,
+        customerName: coverageCustomerNames[covIndex % coverageCustomerNames.length]!,
+        paymentKind,
+        netDays: paymentKind === PaymentKind.PREPAY ? null : netDays,
+        prepayPercent: paymentKind === PaymentKind.NET ? null : prepayPercent,
+        discountPercent: decimal(discountPercent),
+        addOnIds: [addon.id],
+        status: QuoteStatus.Approved,
+        createdAt: minutesAfter(baseTime, 200 + covIndex),
+      };
+
+      const { subtotal, total } = computeFinancials(scenario);
+
+      await prisma.quote.upsert({
+        where: { id: scenario.id },
+        create: {
+          id: scenario.id,
+          org: { connect: { id: org.id } },
+          createdBy: { connect: { id: existingUser.id } },
+          package: { connect: { id: scenario.packageId } },
+          quantity: scenario.quantity,
+          customerName: scenario.customerName,
+          paymentKind: scenario.paymentKind,
+          netDays: scenario.netDays,
+          prepayPercent: scenario.prepayPercent ?? undefined,
+          subtotal,
+          discountPercent: scenario.discountPercent,
+          total,
+          status: scenario.status,
+          createdAt: scenario.createdAt,
+          addOns: { connect: scenario.addOnIds.map((id) => ({ id })) },
+        },
+        update: {
+          package: { connect: { id: scenario.packageId } },
+          quantity: scenario.quantity,
+          customerName: scenario.customerName,
+          paymentKind: scenario.paymentKind,
+          netDays: scenario.netDays,
+          prepayPercent: scenario.prepayPercent ?? undefined,
+          subtotal,
+          discountPercent: scenario.discountPercent,
+          total,
+          status: scenario.status,
+          createdAt: scenario.createdAt,
+          addOns: { set: scenario.addOnIds.map((id) => ({ id })) },
+        },
+      });
+
+      const chain = buildApprovalChain(scenario.discountPercent, scenario.paymentKind, scenario.netDays);
+      const workflowId = `awf_${scenario.id}`;
+      await prisma.approvalWorkflow.upsert({ where: { id: workflowId }, create: { id: workflowId, quote: { connect: { id: scenario.id } } }, update: {} });
+
+      // reset steps
+      const existingStepsCov = await prisma.approvalStep.findMany({ where: { approvalWorkflowId: workflowId } });
+      if (existingStepsCov.length > 0) {
+        await prisma.approvalStep.deleteMany({ where: { approvalWorkflowId: workflowId } });
+      }
+
+      const stepBaseTime = minutesAfter(scenario.createdAt, 1);
+      let order2 = 1;
+      for (let i = 0; i < chain.length; i++) {
+        const persona = chain[i]!;
+        let status: ApprovalStatus = ApprovalStatus.Approved;
+        let approvedAt: Date | null = minutesAfter(stepBaseTime, i + 1);
+
+        // First AE auto-approve; others approved to ensure final Approved status
+        await prisma.approvalStep.create({
+          data: {
+            id: `step_${scenario.id}_${order2}`,
+            approvalWorkflowId: workflowId,
+            stepOrder: order2,
+            persona,
+            approverId: existingUser.id,
+            status,
+            approvedAt: approvedAt ?? undefined,
+          },
+        });
+        order2 += 1;
+      }
+
+      covIndex += 1;
+    }
+  }
+
+  console.log("Seeded Zoom-style demo data + coverage quotes ✔️");
 }
 
 main()

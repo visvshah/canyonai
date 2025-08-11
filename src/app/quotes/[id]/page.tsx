@@ -1,15 +1,14 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api } from "~/trpc/react";
-import { format } from "date-fns";
-import { Box, Button, Chip, CircularProgress, Divider, IconButton, Paper, Table, TableBody, TableCell, TableContainer, TableRow, Typography } from "@mui/material";
+import { format, formatDistanceToNow } from "date-fns";
+import { Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton, Paper, Table, TableBody, TableCell, TableContainer, TableRow, Typography } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import DeleteIcon from "@mui/icons-material/Delete";
-import { Role, ApprovalStatus } from "@prisma/client";
+import { Role, ApprovalStatus, QuoteStatus } from "@prisma/client";
 
-// dnd-kit
 import {
   DndContext,
   PointerSensor,
@@ -45,11 +44,10 @@ type ApprovalWorkflowBuilderProps = {
   hasUnsaved?: boolean;
   onSaveChanges?: () => void | Promise<void>;
   saving?: boolean;
+  showSaveButton?: boolean;
 };
 
-// no DragHandle: whole tile is draggable
-
-function SortableStepItem({ step, onDelete }: { step: Step; onDelete: (id: string) => void }) {
+function SortableStepItem({ step, onDelete, stepIndex }: { step: Step; onDelete: (id: string) => void; stepIndex?: number }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: step.id, disabled: step.status === "Approved" });
 
   const base =
@@ -57,43 +55,48 @@ function SortableStepItem({ step, onDelete }: { step: Step; onDelete: (id: strin
       ? "success"
       : step.status === ApprovalStatus.Rejected
       ? "error"
-      : "warning";
+      : step.status === ApprovalStatus.Pending
+      ? "warning"
+      : "info";
 
   const bg = (theme: any) =>
-    `linear-gradient(135deg, ${alpha(theme.palette[base].main, 0.18)} 0%, ${alpha(theme.palette[base].main, 0.1)} 100%)`;
-  const border = (theme: any) => alpha(theme.palette[base].main, 0.35);
+    `linear-gradient(135deg, ${alpha(theme.palette[base].main, 0.28)} 0%, ${alpha(theme.palette[base].main, 0.18)} 100%)`;
+  const border = (theme: any) => alpha(theme.palette[base].main, 0.7);
   const textColor = (theme: any) => theme.palette.text.primary;
 
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
+  const style: React.CSSProperties = { transform: CSS.Transform.toString(transform), transition };
 
   return (
     <Box ref={setNodeRef} sx={style}>
       <Paper
-        variant="outlined"
-        sx={{
-          position: "relative",
-          px: 1.25,
-          py: 1,
-          minWidth: 120,
-          borderRadius: 1.5,
-          borderColor: border,
-          backgroundImage: bg,
-          color: textColor,
+        elevation={0}
+        sx={(t) => ({
+          px: 1.5,
+          py: 1.25,
+          minWidth: 140,
+          borderRadius: 1,
+          backgroundImage: bg(t),
+          color: textColor(t),
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
           gap: 1,
           boxShadow: isDragging ? 2 : 0,
           cursor: "grab",
+          clipPath: "polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%)",
+          filter: `drop-shadow(0 0 0 ${border(t)})`,
+          WebkitFilter: `drop-shadow(0 0 0 ${border(t)})`,
           "&:hover .delete-btn": { opacity: 1 },
-        }}
+        })}
         {...attributes}
         {...listeners}
       >
         <Box sx={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+          {typeof stepIndex === "number" && (
+            <Typography variant="caption" sx={{ opacity: 0.7, mb: 0.25 }}>
+              Step {stepIndex}
+            </Typography>
+          )}
           <Typography variant="body2" sx={{ fontWeight: 600, textTransform: "uppercase" }} noWrap>
             {step.role}
           </Typography>
@@ -128,31 +131,30 @@ function DraggableRoleTile({ role }: { role: Step["role"] }) {
     data: { from: "palette", role },
   });
 
-  const style: React.CSSProperties = {
-    transform: CSS.Translate.toString((transform as any) ?? { x: 0, y: 0 }),
-    opacity: isDragging ? 0.6 : 1,
-  };
+  const style: React.CSSProperties = { transform: CSS.Translate.toString((transform as any) ?? { x: 0, y: 0 }), opacity: isDragging ? 0.6 : 1 };
 
   return (
     <Box ref={setNodeRef} sx={style}>
       <Paper
-        variant="outlined"
+        elevation={0}
         {...attributes}
         {...listeners}
-        sx={{
-          px: 1.25,
-          py: 1,
-          minWidth: 110,
-          borderRadius: 1.5,
-          backgroundColor: (t) => alpha(t.palette.grey[200], 0.5),
-          borderColor: (t) => alpha(t.palette.grey[400], 0.7),
+        sx={(t) => ({
+          px: 1.5,
+          py: 1.1,
+          minWidth: 130,
+          borderRadius: 1,
+          backgroundColor: alpha(t.palette.primary.light, 0.16),
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           cursor: "grab",
-        }}
+          clipPath: "polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%)",
+          filter: `drop-shadow(0 0 0 ${alpha(t.palette.primary.light, 0.35)})`,
+          WebkitFilter: `drop-shadow(0 0 0 ${alpha(t.palette.primary.light, 0.35)})`,
+        })}
       >
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 600, color: (t) => t.palette.primary.light }}>
           {role}
         </Typography>
       </Paper>
@@ -168,26 +170,72 @@ function WorkflowDroppableContainer({ children }: { children: React.ReactNode })
       border: '1px dashed',
       borderColor: (t) => (isOver ? t.palette.primary.main : alpha(t.palette.divider, 0.6)),
       borderRadius: 1,
-      backgroundColor: (t) => (isOver ? alpha(t.palette.primary.main, 0.04) : 'transparent'),
+      backgroundColor: (t) => (isOver ? alpha(t.palette.primary.main, 0.06) : alpha(t.palette.common.white, 0.02)),
     }}>
       {children}
     </Box>
   );
 }
 
-function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, saving }: ApprovalWorkflowBuilderProps) {
+function ReadOnlyStepItem({ step, stepIndex }: { step: Step; stepIndex: number }) {
+  const base =
+    step.status === ApprovalStatus.Approved
+      ? "success"
+      : step.status === ApprovalStatus.Rejected
+      ? "error"
+      : step.status === ApprovalStatus.Pending
+      ? "warning"
+      : "info";
+
+  const bg = (theme: any) =>
+    `linear-gradient(135deg, ${alpha(theme.palette[base].main, 0.28)} 0%, ${alpha(theme.palette[base].main, 0.18)} 100%)`;
+  const border = (theme: any) => alpha(theme.palette[base].main, 0.7);
+  const textColor = (theme: any) => theme.palette.text.primary;
+
+  return (
+    <Paper
+      elevation={0}
+      sx={(t) => ({
+        px: 1.5,
+        py: 1.25,
+        minWidth: 140,
+        borderRadius: 1,
+        backgroundImage: bg(t),
+        color: textColor(t),
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 1,
+        clipPath: "polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%)",
+        filter: `drop-shadow(0 0 0 ${border(t)})`,
+        WebkitFilter: `drop-shadow(0 0 0 ${border(t)})`,
+      })}
+    >
+      <Box sx={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <Typography variant="caption" sx={{ opacity: 0.7, mb: 0.25 }}>
+          Step {stepIndex}
+        </Typography>
+        <Typography variant="body2" sx={{ fontWeight: 600, textTransform: "uppercase" }} noWrap>
+          {step.role}
+        </Typography>
+        {step.status ? (
+          <Typography variant="caption" sx={{ opacity: 0.8 }}>
+            {step.status.toLowerCase()}
+          </Typography>
+        ) : null}
+      </Box>
+    </Paper>
+  );
+}
+
+function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, saving, showSaveButton = true }: ApprovalWorkflowBuilderProps) {
   const [steps, setSteps] = useState<Step[]>(value ?? []);
 
   useEffect(() => {
     setSteps(value ?? []);
   }, [value]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    }),
-  );
+  const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
 
   const updateSteps = (next: Step[]) => {
     setSteps(next);
@@ -203,12 +251,11 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
     // Adding from palette
     if (activeData.from === "palette") {
       const role: Step["role"] = activeData.role;
-      let insertIndex = steps.length; // default append
+      let insertIndex = steps.length;
       if (over.id !== "workflow-container") {
         const overIndex = steps.findIndex((s) => s.id === over.id);
         if (overIndex >= 0) insertIndex = overIndex;
       }
-      // Enforce rule: cannot insert before approved steps → clamp to after the last approved index
       const lastApprovedIdx = steps.reduce((last, s, idx) => (s.status === ApprovalStatus.Approved ? idx : last), -1);
       const minInsert = lastApprovedIdx + 1;
       if (insertIndex < minInsert) insertIndex = minInsert;
@@ -216,7 +263,6 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
       return;
     }
 
-    // Reordering inside the workflow
     const oldIndex = steps.findIndex((s) => s.id === active.id);
     if (oldIndex === -1) return;
     let newIndex = oldIndex;
@@ -226,25 +272,40 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
       const idx = steps.findIndex((s) => s.id === over.id);
       if (idx !== -1) newIndex = idx;
     }
-    // Enforce rule: cannot move a step before approved steps → clamp to after the last approved index
     const lastApprovedIdx = steps.reduce((last, s, idx) => (s.status === ApprovalStatus.Approved ? idx : last), -1);
     const minIndex = Math.min(steps.length - 1, lastApprovedIdx + 1);
     if (newIndex < minIndex) newIndex = minIndex;
-    if (oldIndex !== newIndex) updateSteps(arrayMove(steps, oldIndex, newIndex));
+    if (oldIndex !== newIndex) {
+      const next = arrayMove(steps, oldIndex, newIndex);
+      updateSteps(applyGating(next));
+    }
   };
 
   const insertAt = (index: number, role: Step["role"]) => {
-    const newStep: Step = { id: crypto.randomUUID(), role, status: ApprovalStatus.Pending };
+    const newStep: Step = { id: crypto.randomUUID(), role, status: ApprovalStatus.Waiting };
     const next = [...steps.slice(0, index), newStep, ...steps.slice(index)];
-    updateSteps(next);
+    updateSteps(applyGating(next));
   };
 
   const handleDelete = (id: string) => {
     const idx = steps.findIndex((s) => s.id === id);
-    if (idx === -1) return;
-    // Enforce rule: cannot delete approved steps
-    if (steps[idx]!.status === ApprovalStatus.Approved) return;
-    updateSteps(steps.filter((s) => s.id !== id));
+    if (idx === -1 || steps[idx]!.status === ApprovalStatus.Approved) return;
+    const next = steps.filter((s) => s.id !== id);
+    updateSteps(applyGating(next));
+  };
+
+  const applyGating = (list: Step[]): Step[] => {
+    const out = list.map((s) => ({ ...s }));
+    const hasRejected = out.some((s) => s.status === ApprovalStatus.Rejected);
+    if (hasRejected) return out;
+    const firstNonApprovedIndex = out.findIndex((s) => s.status !== ApprovalStatus.Approved);
+    if (firstNonApprovedIndex === -1) return out;
+    for (let i = 0; i < out.length; i++) {
+      const st = out[i]!;
+      if (st.status === ApprovalStatus.Approved) continue;
+      st.status = i === firstNonApprovedIndex ? ApprovalStatus.Pending : ApprovalStatus.Waiting;
+    }
+    return out;
   };
 
   return (
@@ -264,18 +325,20 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
         <SortableContext items={steps.map((s) => s.id)} strategy={horizontalListSortingStrategy}>
           <WorkflowDroppableContainer>
             <Box component="ol" sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
-              {steps.map((step) => (
-                <SortableStepItem key={step.id} step={step} onDelete={handleDelete} />
+              {steps.map((step, i) => (
+                <SortableStepItem key={step.id} step={step} onDelete={handleDelete} stepIndex={i + 1} />
               ))}
             </Box>
           </WorkflowDroppableContainer>
         </SortableContext>
 
-        <Box sx={{ mt: 1.5 }}>
-          <Button variant="contained" disabled={!hasUnsaved || saving} onClick={() => onSaveChanges?.()}>
-            {saving ? "Saving..." : "Save changes"}
-          </Button>
-        </Box>
+        {showSaveButton ? (
+          <Box sx={{ mt: 1.5 }}>
+            <Button variant="contained" disabled={!hasUnsaved || saving} onClick={() => onSaveChanges?.()}>
+              {saving ? "Saving..." : "Save changes"}
+            </Button>
+          </Box>
+        ) : null}
       </Box>
     </DndContext>
   );
@@ -284,6 +347,7 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
 export default function QuoteDetailPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const quoteId = params?.id;
 
   const utils = api.useUtils();
@@ -292,8 +356,12 @@ export default function QuoteDetailPage() {
     { enabled: !!quoteId, staleTime: 0 },
   );
 
-  // Local builder state derived from server data
-  const [builderSteps, setBuilderSteps] = useState<Step[]>([]);
+  const [displaySteps, setDisplaySteps] = useState<Step[]>([]);
+  const [draftSteps, setDraftSteps] = useState<Step[]>([]);
+
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [sendDialogOpen, setSendDialogOpen] = useState(false);
+  const [aiEditOpen, setAiEditOpen] = useState(false);
 
   useEffect(() => {
     if (!quote) return;
@@ -302,16 +370,28 @@ export default function QuoteDetailPage() {
       role: s.persona as Role,
       status: s.status as ApprovalStatus,
     }));
-    setBuilderSteps(mapped);
-  }, [quote]);
+    setDisplaySteps(mapped);
+    if (!editorOpen) setDraftSteps(mapped);
+  }, [quote, editorOpen]);
 
   const setWorkflowMutation = api.quote.setWorkflow.useMutation();
+  const approveMutation = api.quote.approveNextForRole.useMutation();
 
-  // Top-level save handler used by the builder component
   const handleSaveWorkflow = async () => {
     if (!quoteId) return;
-    const payload = builderSteps.map((s) => ({ persona: s.role, status: s.status }));
+    const payload = draftSteps.map((s) => ({ persona: s.role, status: s.status }));
     await setWorkflowMutation.mutateAsync({ quoteId, steps: payload });
+    await Promise.all([
+      utils.quote.byId.invalidate({ id: quoteId }),
+      utils.quote.all.invalidate(),
+    ]);
+    setDisplaySteps(draftSteps);
+    setEditorOpen(false);
+  };
+
+  const handleApproveAs = async (role: Role) => {
+    if (!quoteId) return;
+    await approveMutation.mutateAsync({ quoteId, role });
     await Promise.all([
       utils.quote.byId.invalidate({ id: quoteId }),
       utils.quote.all.invalidate(),
@@ -319,6 +399,12 @@ export default function QuoteDetailPage() {
   };
 
   const onBack = () => {
+    const from = searchParams?.get("from");
+    const role = searchParams?.get("role");
+    if (from === "home") {
+      router.push(role ? `/home?role=${encodeURIComponent(role)}` : "/home");
+      return;
+    }
     if (typeof window !== "undefined" && window.history.length > 1) {
       router.back();
     } else {
@@ -326,20 +412,9 @@ export default function QuoteDetailPage() {
     }
   };
 
-  // Compute current server steps for unsaved-change comparison
-  const serverStepsForCompare = useMemo(
-    () =>
-      (quote?.approvalWorkflow?.steps ?? []).map((s) => ({
-        id: s.id,
-        role: s.persona as Role,
-        status: s.status as ApprovalStatus,
-      })),
-    [quote],
-  );
-
-  const hasUnsaved = useMemo(
-    () => JSON.stringify(builderSteps) !== JSON.stringify(serverStepsForCompare),
-    [builderSteps, serverStepsForCompare],
+  const hasDraftUnsaved = useMemo(
+    () => JSON.stringify(draftSteps) !== JSON.stringify(displaySteps),
+    [draftSteps, displaySteps],
   );
 
   if (isLoading || !quote) {
@@ -349,6 +424,24 @@ export default function QuoteDetailPage() {
       </Box>
     );
   }
+
+  const seats = (quote as any).quantity ?? 1;
+  const packageUnit = Number((quote as any).package?.unitPrice ?? 0);
+  const addOnSum = ((quote as any).addOns ?? []).reduce(
+    (acc: number, a: any) => acc + Number(a.unitPrice ?? 0),
+    0,
+  );
+  const packageExtended = packageUnit * seats;
+  const subtotalNum = Number((quote as any).subtotal ?? 0) || packageExtended + addOnSum;
+  const discountPct = Number((quote as any).discountPercent ?? 0);
+  const discountValue = (subtotalNum * discountPct) / 100;
+  const totalNum = Number((quote as any).total ?? subtotalNum - discountValue);
+
+  const nextPending = quote.approvalWorkflow?.steps?.find((s) => s.status === "Pending");
+  const pendingSince = nextPending?.updatedAt ?? nextPending?.createdAt ?? quote.createdAt;
+
+  const fmt = (n: number) => n.toLocaleString(undefined, { style: "currency", currency: "USD" });
+  const isApproved = quote.status === QuoteStatus.Approved;
 
   return (
     <main className="flex min-h-screen flex-col gap-6 p-6">
@@ -361,129 +454,276 @@ export default function QuoteDetailPage() {
         </Typography>
       </Box>
 
-      <Box>
-        <Typography variant="subtitle1" gutterBottom>
-          Quote Details
-        </Typography>
-        <TableContainer component={Paper} variant="outlined" sx={{ mb: 1 }}>
-          <Table size="small" aria-label="quote details">
-            <TableBody>
-              <TableRow>
-                <TableCell width={180}>Status</TableCell>
-                <TableCell>
-                  <Chip label={quote.status} size="small" />
-                </TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Quote ID</TableCell>
-                <TableCell>{quote.id}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Org</TableCell>
-                <TableCell>{quote.org.name}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Payment Kind</TableCell>
-                <TableCell>{quote.paymentKind}</TableCell>
-              </TableRow>
-              {quote.paymentKind === "NET" && (
+      <Box display="flex" justifyContent="flex-end" gap={1}>
+        <Button
+          variant="outlined"
+          onClick={() => setAiEditOpen(true)}
+        >
+          Edit Quote with AI
+        </Button>
+        <Button
+          variant="contained"
+          onClick={() => setSendDialogOpen(true)}
+          disabled={!isApproved}
+          title={!isApproved ? "Available when quote is Approved" : undefined}
+        >
+          Create & Send Contract
+        </Button>
+      </Box>
+
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1.2fr 1fr' }, gap: 2 }}>
+        <Box>
+          <Paper variant="outlined" sx={{ p: 1.5 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              Details
+            </Typography>
+            <Table size="small" aria-label="quote details">
+              <TableBody>
                 <TableRow>
-                  <TableCell>Net Days</TableCell>
-                  <TableCell>{quote.netDays}</TableCell>
+                  <TableCell width={180}>Status</TableCell>
+                  <TableCell>
+                    <Chip label={quote.status} size="small" />
+                    {nextPending ? (
+                      <Button
+                        size="small"
+                        sx={{ ml: 1 }}
+                        variant="contained"
+                        onClick={() => handleApproveAs(nextPending.persona as Role)}
+                        disabled={approveMutation.isPending}
+                      >
+                        Approve as {nextPending.persona}
+                      </Button>
+                    ) : null}
+                  </TableCell>
                 </TableRow>
-              )}
-              {quote.paymentKind === "PREPAY" && (
                 <TableRow>
-                  <TableCell>Prepay %</TableCell>
-                  <TableCell>{quote.prepayPercent?.toString()}</TableCell>
+                  <TableCell>Org</TableCell>
+                  <TableCell>{quote.org.name}</TableCell>
                 </TableRow>
-              )}
-              {quote.paymentKind === "BOTH" && (
-                <>
+                <TableRow>
+                  <TableCell>Package</TableCell>
+                  <TableCell>
+                    <Box>
+                      <Typography variant="body2" fontWeight={600}>
+                        {(quote as any).package?.name}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {(quote as any).package?.description}
+                      </Typography>
+                    </Box>
+                  </TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Add-ons</TableCell>
+                  <TableCell>
+                    {(quote as any).addOns && (quote as any).addOns.length > 0 ? (
+                      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                        {(quote as any).addOns.map((a: any) => (
+                          <Chip key={a.id} size="small" label={a.name as string} />
+                        ))}
+                      </Box>
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        None
+                      </Typography>
+                    )}
+                  </TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Seats</TableCell>
+                  <TableCell>{seats}</TableCell>
+                </TableRow>
+                {nextPending ? (
+                  <TableRow>
+                    <TableCell>Next Approval</TableCell>
+                    <TableCell>
+                      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                        <Chip label={(nextPending.persona as string) ?? "—"} size="small" />
+                        <Typography variant="body2" color="text.secondary">
+                          Pending {formatDistanceToNow(new Date(pendingSince as Date), { addSuffix: true })}
+                        </Typography>
+                      </Box>
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+                <TableRow>
+                  <TableCell>Created By</TableCell>
+                  <TableCell>{quote.createdBy?.name ?? quote.createdBy?.email ?? "—"}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Quote ID</TableCell>
+                  <TableCell>{quote.id}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Created</TableCell>
+                  <TableCell>{format(new Date(quote.createdAt), "MMM d, yyyy")}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell>Last Updated</TableCell>
+                  <TableCell>{format(new Date(quote.updatedAt), "MMM d, yyyy")}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </Paper>
+        </Box>
+
+        <Box>
+          <Paper variant="outlined" sx={{ p: 1.5 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              Financials
+            </Typography>
+            <Box sx={{ display: "grid", rowGap: 0.75 }}>
+              <Typography variant="body2">
+                Package {((quote as any).package?.name as string) ?? ""} @ <b>{fmt(packageUnit)}</b> × <b>{seats}</b> = <b>{fmt(packageExtended)}</b>
+              </Typography>
+              <Typography variant="body2">
+                Add-ons total = <b>{fmt(addOnSum)}</b>
+              </Typography>
+              <Divider sx={{ my: 0.5 }} />
+              <Typography variant="body2">
+                Subtotal = <b>{fmt(subtotalNum)}</b>
+              </Typography>
+              <Typography variant="body2">
+                Discount {discountPct}% = <b>-{fmt(discountValue)}</b>
+              </Typography>
+              <Divider sx={{ my: 0.5 }} />
+              <Typography variant="body1" fontWeight={700}>
+                Total = {fmt(totalNum)}
+              </Typography>
+            </Box>
+
+            <Divider sx={{ my: 1.5 }} />
+            <Typography variant="subtitle2" gutterBottom>
+              Payment Terms
+            </Typography>
+            <Table size="small" aria-label="payment terms">
+              <TableBody>
+                <TableRow>
+                  <TableCell width={140}>Payment Kind</TableCell>
+                  <TableCell>{quote.paymentKind}</TableCell>
+                </TableRow>
+                {quote.paymentKind === "NET" || quote.paymentKind === "BOTH" ? (
                   <TableRow>
                     <TableCell>Net Days</TableCell>
-                    <TableCell>{quote.netDays}</TableCell>
+                    <TableCell>{quote.netDays ?? "—"}</TableCell>
                   </TableRow>
+                ) : null}
+                {quote.paymentKind === "PREPAY" || quote.paymentKind === "BOTH" ? (
                   <TableRow>
                     <TableCell>Prepay %</TableCell>
-                    <TableCell>{quote.prepayPercent?.toString()}</TableCell>
+                    <TableCell>{(quote as any).prepayPercent?.toString?.() ?? String(quote.prepayPercent ?? "—")}</TableCell>
                   </TableRow>
-                </>
-              )}
-              <TableRow>
-                <TableCell>Subtotal</TableCell>
-                <TableCell>${Number(quote.subtotal as any).toFixed ? Number(quote.subtotal as any).toFixed(2) : (quote.subtotal as any).toString?.() ?? String(quote.subtotal)}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Discount %</TableCell>
-                <TableCell>{Number(quote.discountPercent as any).toFixed ? Number(quote.discountPercent as any).toFixed(0) : (quote.discountPercent as any).toString?.() ?? String(quote.discountPercent)}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Total</TableCell>
-                <TableCell>${Number(quote.total as any).toFixed ? Number(quote.total as any).toFixed(2) : (quote.total as any).toString?.() ?? String(quote.total)}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Package</TableCell>
-                <TableCell>{(quote as any).package?.name}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Seats</TableCell>
-                <TableCell>{(quote as any).seatCount ?? (quote as any).quantity ?? 1}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Created By</TableCell>
-                <TableCell>{quote.createdBy?.name ?? quote.createdBy?.email ?? "—"}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Add-ons</TableCell>
-                <TableCell>
-                  {(quote as any).addOns && (quote as any).addOns.length > 0 ? (
-                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                      {(quote as any).addOns.map((a: any) => (
-                        <Chip key={a.id} size="small" label={a.name as string} />
-                      ))}
-                    </Box>
-                  ) : (
-                    <Typography variant="body2" color="text.secondary">None</Typography>
-                  )}
-                </TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Created</TableCell>
-                <TableCell>{format(new Date(quote.createdAt), "MMM d, yyyy")}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell>Updated</TableCell>
-                <TableCell>{format(new Date(quote.updatedAt), "MMM d, yyyy")}</TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
-        </TableContainer>
+                ) : null}
+              </TableBody>
+            </Table>
+          </Paper>
+        </Box>
       </Box>
 
       <Divider sx={{ my: 2 }} />
 
       <Box>
-        <Typography variant="subtitle1" gutterBottom>
-          Workflow Editor
-        </Typography>
-        <ApprovalWorkflowBuilder
-          value={builderSteps}
-          onChange={(s) => setBuilderSteps(s)}
-          hasUnsaved={hasUnsaved}
-          saving={setWorkflowMutation.isPending}
-          onSaveChanges={handleSaveWorkflow}
-        />
+        <Typography variant="subtitle1" gutterBottom>Approval Workflow</Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+          {displaySteps.length > 0 ? (
+            displaySteps.map((s, i) => (
+              <ReadOnlyStepItem key={s.id} step={s} stepIndex={i + 1} />
+            ))
+          ) : (
+            <Typography variant="body2" color="text.secondary">No steps</Typography>
+          )}
+        </Box>
+        <Box sx={{ mt: 1.5 }}>
+          <Button variant="outlined" onClick={() => setEditorOpen(true)}>Edit Workflow</Button>
+        </Box>
       </Box>
+
+      <Dialog
+        fullWidth
+        maxWidth="md"
+        open={editorOpen}
+        onClose={() => {
+          // reset drafts when closing without save
+          setDraftSteps(displaySteps);
+          setEditorOpen(false);
+        }}
+      >
+        <DialogTitle sx={{ color: (t) => t.palette.common.white }}>Edit Approval Workflow</DialogTitle>
+        <DialogContent dividers>
+          <ApprovalWorkflowBuilder
+            value={draftSteps}
+            onChange={(s) => setDraftSteps(s)}
+            hasUnsaved={hasDraftUnsaved}
+            saving={setWorkflowMutation.isPending}
+            onSaveChanges={handleSaveWorkflow}
+            showSaveButton={false}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              setDraftSteps(displaySteps);
+              setEditorOpen(false);
+            }}
+            disabled={setWorkflowMutation.isPending}
+          >
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={handleSaveWorkflow} disabled={!hasDraftUnsaved || setWorkflowMutation.isPending}>
+            {setWorkflowMutation.isPending ? 'Saving...' : 'Save changes'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        fullWidth
+        maxWidth="sm"
+        open={sendDialogOpen}
+        onClose={() => setSendDialogOpen(false)}
+      >
+        <DialogTitle sx={{ color: (t) => t.palette.common.white }}>Create & Send Contract</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary">
+            Placeholder: This will generate a contract from the quote and send it to the customer via email when implemented.
+          </Typography>
+          {!isApproved ? (
+            <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
+              This action is available only when the quote is Approved.
+            </Typography>
+          ) : null}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSendDialogOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        fullWidth
+        maxWidth="sm"
+        open={aiEditOpen}
+        onClose={() => setAiEditOpen(false)}
+      >
+        <DialogTitle sx={{ color: (t) => t.palette.common.white }}>Edit Quote with AI</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary">
+            Placeholder: Here you will be able to ask AI to modify pricing, terms, or package details. Coming soon.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAiEditOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
 
       {quote.documentHtml ? (
         <Box>
           <Typography variant="subtitle1" gutterBottom>
-            Contract Preview
+            Contract
           </Typography>
-          <Paper variant="outlined" sx={{ p: 1.5 }}>
-            {/* eslint-disable-next-line react/no-danger */}
-            <div dangerouslySetInnerHTML={{ __html: quote.documentHtml }} />
+          <Paper
+            variant="outlined"
+            sx={{ p: 1.5, whiteSpace: "pre-wrap", fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace', fontSize: '0.9rem' }}
+          >
+            {quote.documentHtml}
           </Paper>
         </Box>
       ) : null}
