@@ -74,39 +74,64 @@ export default function CreateQuotePage() {
 
   const { data: catalog } = api.quote.catalog.useQuery(undefined, { staleTime: 60_000 });
 
-  const friendlyGreeting = useMemo(() => {
-    const pkgList = (catalog?.packages ?? []).slice(0, 10).map((p) => `${p.name}`).join("\n- ");
-    const addOnList = (catalog?.addOns ?? []).slice(0, 10).map((a) => `${a.name}`).join("\n- ");
-    if (mode === "find") {
-      return [
-        "Hey! I can help you find quotes. Specify a package or add-ons to get started.",
-        pkgList ? `\nAvailable packages:\n- ${pkgList}` : "",
-        addOnList ? `\nAvailable add-ons:\n- ${addOnList}` : "",
-      ].filter(Boolean).join("\n");
-    }
-    return [
-      "I can create a quote. Minimal: package (name or id) and customerName; add-ons optional.",
-      "If seats/discount/payment are missing, I’ll infer from similar quotes and proceed.",
-      "Helpful optional fields: seats, discountPercent, paymentKind, netDays, prepayPercent.",
-      pkgList ? `\nAvailable packages:\n- ${pkgList}` : "",
-      addOnList ? `\nAvailable add-ons:\n- ${addOnList}` : "",
-    ].filter(Boolean).join("\n");
-  }, [catalog, mode]);
+  const hasCatalog = useMemo(() => {
+    const pkgCount = (catalog?.packages?.length ?? 0);
+    const addOnCount = (catalog?.addOns?.length ?? 0);
+    return pkgCount + addOnCount > 0;
+  }, [catalog]);
 
-  // Initial greeting on mount
+  // Delay initial greeting until catalog is loaded so we always show the full message with packages/add-ons
   useEffect(() => {
-    setMessages([{ id: crypto.randomUUID(), role: "assistant", content: friendlyGreeting }]);
-  }, []);
+    if (hasCatalog && messages.length === 0) {
+      const pkgList = (catalog?.packages ?? []).slice(0, 10).map((p) => `${p.name}`).join("\n- ");
+      const addOnList = (catalog?.addOns ?? []).slice(0, 10).map((a) => `${a.name}`).join("\n- ");
+      const content =
+        mode === "find"
+          ? [
+              "Hey! I can help you find quotes. Specify a package or add-ons to get started.",
+              pkgList ? `\nAvailable packages:\n- ${pkgList}` : "",
+              addOnList ? `\nAvailable add-ons:\n- ${addOnList}` : "",
+            ].filter(Boolean).join("\n")
+          : [
+              "I can create a quote. Minimal: package (name or id) and customerName; add-ons optional.",
+              "If seats/discount/payment are missing, I’ll infer from similar quotes and proceed.",
+              "Helpful optional fields: seats, discountPercent, paymentKind, netDays, prepayPercent.",
+              pkgList ? `\nAvailable packages:\n- ${pkgList}` : "",
+              addOnList ? `\nAvailable add-ons:\n- ${addOnList}` : "",
+            ].filter(Boolean).join("\n");
+      setMessages([{ id: crypto.randomUUID(), role: "assistant", content }]);
+    }
+  }, [hasCatalog, catalog, mode, messages.length]);
 
   // Reset when mode changes
   useEffect(() => {
-    setMessages([{ id: crypto.randomUUID(), role: "assistant", content: friendlyGreeting }]);
+    if (hasCatalog) {
+      const pkgList = (catalog?.packages ?? []).slice(0, 10).map((p) => `${p.name}`).join("\n- ");
+      const addOnList = (catalog?.addOns ?? []).slice(0, 10).map((a) => `${a.name}`).join("\n- ");
+      const content =
+        mode === "find"
+          ? [
+              "Hey! I can help you find quotes. Specify a package or add-ons to get started.",
+              pkgList ? `\nAvailable packages:\n- ${pkgList}` : "",
+              addOnList ? `\nAvailable add-ons:\n- ${addOnList}` : "",
+            ].filter(Boolean).join("\n")
+          : [
+              "I can create a quote. Minimal: package (name or id) and customerName; add-ons optional.",
+              "If seats/discount/payment are missing, I’ll infer from similar quotes and proceed.",
+              "Helpful optional fields: seats, discountPercent, paymentKind, netDays, prepayPercent.",
+              pkgList ? `\nAvailable packages:\n- ${pkgList}` : "",
+              addOnList ? `\nAvailable add-ons:\n- ${addOnList}` : "",
+            ].filter(Boolean).join("\n");
+      setMessages([{ id: crypto.randomUUID(), role: "assistant", content }]);
+    } else {
+      setMessages([]);
+    }
     setInput("");
     setIsProcessing(false);
     setHasStoppedChat(false);
     setFindResults([]);
     setSimilarCue(null);
-  }, [mode]);
+  }, [mode, hasCatalog, catalog]);
 
   const pushAssistant = (content: string) => setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "assistant", content }]);
 
@@ -180,7 +205,7 @@ export default function CreateQuotePage() {
     setIsProcessing(false);
     setHasStoppedChat(false);
     setFindResults([]);
-    setMessages([{ id: crypto.randomUUID(), role: "assistant", content: friendlyGreeting }]);
+    // Do not push greeting immediately; the hasCatalog-gated effect will add it when ready
   };
 
   const onModeChange = (_: React.SyntheticEvent, newValue: string) => setMode(newValue as Mode);
