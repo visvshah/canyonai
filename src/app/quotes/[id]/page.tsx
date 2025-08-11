@@ -9,7 +9,6 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import DeleteIcon from "@mui/icons-material/Delete";
 import { Role, ApprovalStatus } from "@prisma/client";
 
-// dnd-kit
 import {
   DndContext,
   PointerSensor,
@@ -48,8 +47,6 @@ type ApprovalWorkflowBuilderProps = {
   showSaveButton?: boolean;
 };
 
-// no DragHandle: whole tile is draggable
-
 function SortableStepItem({ step, onDelete, stepIndex }: { step: Step; onDelete: (id: string) => void; stepIndex?: number }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: step.id, disabled: step.status === "Approved" });
 
@@ -63,28 +60,23 @@ function SortableStepItem({ step, onDelete, stepIndex }: { step: Step; onDelete:
       : "info";
 
   const bg = (theme: any) =>
-    `linear-gradient(135deg, ${alpha(theme.palette[base].main, 0.18)} 0%, ${alpha(theme.palette[base].main, 0.1)} 100%)`;
-  const border = (theme: any) => alpha(theme.palette[base].main, 0.35);
+    `linear-gradient(135deg, ${alpha(theme.palette[base].main, 0.28)} 0%, ${alpha(theme.palette[base].main, 0.18)} 100%)`;
+  const border = (theme: any) => alpha(theme.palette[base].main, 0.7);
   const textColor = (theme: any) => theme.palette.text.primary;
 
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
+  const style: React.CSSProperties = { transform: CSS.Transform.toString(transform), transition };
 
   return (
     <Box ref={setNodeRef} sx={style}>
       <Paper
-        variant="outlined"
-        sx={{
-          position: "relative",
+        elevation={0}
+        sx={(t) => ({
           px: 1.5,
           py: 1.25,
           minWidth: 140,
           borderRadius: 1,
-          borderColor: border,
-          backgroundImage: bg,
-          color: textColor,
+          backgroundImage: bg(t),
+          color: textColor(t),
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
@@ -92,8 +84,10 @@ function SortableStepItem({ step, onDelete, stepIndex }: { step: Step; onDelete:
           boxShadow: isDragging ? 2 : 0,
           cursor: "grab",
           clipPath: "polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%)",
+          filter: `drop-shadow(0 0 0 ${border(t)})`,
+          WebkitFilter: `drop-shadow(0 0 0 ${border(t)})`,
           "&:hover .delete-btn": { opacity: 1 },
-        }}
+        })}
         {...attributes}
         {...listeners}
       >
@@ -137,32 +131,30 @@ function DraggableRoleTile({ role }: { role: Step["role"] }) {
     data: { from: "palette", role },
   });
 
-  const style: React.CSSProperties = {
-    transform: CSS.Translate.toString((transform as any) ?? { x: 0, y: 0 }),
-    opacity: isDragging ? 0.6 : 1,
-  };
+  const style: React.CSSProperties = { transform: CSS.Translate.toString((transform as any) ?? { x: 0, y: 0 }), opacity: isDragging ? 0.6 : 1 };
 
   return (
     <Box ref={setNodeRef} sx={style}>
       <Paper
-        variant="outlined"
+        elevation={0}
         {...attributes}
         {...listeners}
-        sx={{
+        sx={(t) => ({
           px: 1.5,
           py: 1.1,
           minWidth: 130,
           borderRadius: 1,
-          backgroundColor: (t) => alpha(t.palette.grey[200], 0.65),
-          borderColor: (t) => alpha(t.palette.grey[400], 0.7),
+          backgroundColor: alpha(t.palette.primary.light, 0.16),
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           cursor: "grab",
           clipPath: "polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%)",
-        }}
+          filter: `drop-shadow(0 0 0 ${alpha(t.palette.primary.light, 0.35)})`,
+          WebkitFilter: `drop-shadow(0 0 0 ${alpha(t.palette.primary.light, 0.35)})`,
+        })}
       >
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 600, color: (t) => t.palette.primary.light }}>
           {role}
         </Typography>
       </Paper>
@@ -178,14 +170,13 @@ function WorkflowDroppableContainer({ children }: { children: React.ReactNode })
       border: '1px dashed',
       borderColor: (t) => (isOver ? t.palette.primary.main : alpha(t.palette.divider, 0.6)),
       borderRadius: 1,
-      backgroundColor: (t) => (isOver ? alpha(t.palette.primary.main, 0.04) : 'transparent'),
+      backgroundColor: (t) => (isOver ? alpha(t.palette.primary.main, 0.06) : alpha(t.palette.common.white, 0.02)),
     }}>
       {children}
     </Box>
   );
 }
 
-// Read-only renderer for workflow steps
 function ReadOnlyStepItem({ step, stepIndex }: { step: Step; stepIndex: number }) {
   const base =
     step.status === ApprovalStatus.Approved
@@ -197,27 +188,28 @@ function ReadOnlyStepItem({ step, stepIndex }: { step: Step; stepIndex: number }
       : "info";
 
   const bg = (theme: any) =>
-    `linear-gradient(135deg, ${alpha(theme.palette[base].main, 0.18)} 0%, ${alpha(theme.palette[base].main, 0.1)} 100%)`;
-  const border = (theme: any) => alpha(theme.palette[base].main, 0.35);
+    `linear-gradient(135deg, ${alpha(theme.palette[base].main, 0.28)} 0%, ${alpha(theme.palette[base].main, 0.18)} 100%)`;
+  const border = (theme: any) => alpha(theme.palette[base].main, 0.7);
   const textColor = (theme: any) => theme.palette.text.primary;
 
   return (
     <Paper
-      variant="outlined"
-      sx={{
+      elevation={0}
+      sx={(t) => ({
         px: 1.5,
         py: 1.25,
         minWidth: 140,
         borderRadius: 1,
-        borderColor: border,
-        backgroundImage: bg,
-        color: textColor,
+        backgroundImage: bg(t),
+        color: textColor(t),
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
         gap: 1,
         clipPath: "polygon(0 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 0 100%)",
-      }}
+        filter: `drop-shadow(0 0 0 ${border(t)})`,
+        WebkitFilter: `drop-shadow(0 0 0 ${border(t)})`,
+      })}
     >
       <Box sx={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
         <Typography variant="caption" sx={{ opacity: 0.7, mb: 0.25 }}>
@@ -243,12 +235,7 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
     setSteps(value ?? []);
   }, [value]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    }),
-  );
+  const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
 
   const updateSteps = (next: Step[]) => {
     setSteps(next);
@@ -264,12 +251,11 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
     // Adding from palette
     if (activeData.from === "palette") {
       const role: Step["role"] = activeData.role;
-      let insertIndex = steps.length; // default append
+      let insertIndex = steps.length;
       if (over.id !== "workflow-container") {
         const overIndex = steps.findIndex((s) => s.id === over.id);
         if (overIndex >= 0) insertIndex = overIndex;
       }
-      // Enforce rule: cannot insert before approved steps → clamp to after the last approved index
       const lastApprovedIdx = steps.reduce((last, s, idx) => (s.status === ApprovalStatus.Approved ? idx : last), -1);
       const minInsert = lastApprovedIdx + 1;
       if (insertIndex < minInsert) insertIndex = minInsert;
@@ -277,7 +263,6 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
       return;
     }
 
-    // Reordering inside the workflow
     const oldIndex = steps.findIndex((s) => s.id === active.id);
     if (oldIndex === -1) return;
     let newIndex = oldIndex;
@@ -287,7 +272,6 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
       const idx = steps.findIndex((s) => s.id === over.id);
       if (idx !== -1) newIndex = idx;
     }
-    // Enforce rule: cannot move a step before approved steps → clamp to after the last approved index
     const lastApprovedIdx = steps.reduce((last, s, idx) => (s.status === ApprovalStatus.Approved ? idx : last), -1);
     const minIndex = Math.min(steps.length - 1, lastApprovedIdx + 1);
     if (newIndex < minIndex) newIndex = minIndex;
@@ -305,14 +289,11 @@ function ApprovalWorkflowBuilder({ value, onChange, hasUnsaved, onSaveChanges, s
 
   const handleDelete = (id: string) => {
     const idx = steps.findIndex((s) => s.id === id);
-    if (idx === -1) return;
-    // Enforce rule: cannot delete approved steps
-    if (steps[idx]!.status === ApprovalStatus.Approved) return;
+    if (idx === -1 || steps[idx]!.status === ApprovalStatus.Approved) return;
     const next = steps.filter((s) => s.id !== id);
     updateSteps(applyGating(next));
   };
 
-  // Gating: promote only the first non-approved step to Pending; others Waiting
   const applyGating = (list: Step[]): Step[] => {
     const out = list.map((s) => ({ ...s }));
     const hasRejected = out.some((s) => s.status === ApprovalStatus.Rejected);
@@ -375,7 +356,6 @@ export default function QuoteDetailPage() {
     { enabled: !!quoteId, staleTime: 0 },
   );
 
-  // Read-only display steps and draft steps for modal editing
   const [displaySteps, setDisplaySteps] = useState<Step[]>([]);
   const [draftSteps, setDraftSteps] = useState<Step[]>([]);
 
@@ -395,7 +375,6 @@ export default function QuoteDetailPage() {
   const setWorkflowMutation = api.quote.setWorkflow.useMutation();
   const approveMutation = api.quote.approveNextForRole.useMutation();
 
-  // Top-level save handler used by the builder component
   const handleSaveWorkflow = async () => {
     if (!quoteId) return;
     const payload = draftSteps.map((s) => ({ persona: s.role, status: s.status }));
@@ -431,7 +410,6 @@ export default function QuoteDetailPage() {
     }
   };
 
-  // Unsaved comparison: modal draft vs currently displayed
   const hasDraftUnsaved = useMemo(
     () => JSON.stringify(draftSteps) !== JSON.stringify(displaySteps),
     [draftSteps, displaySteps],
@@ -445,20 +423,18 @@ export default function QuoteDetailPage() {
     );
   }
 
-  // Derived pricing numbers for clear equation
   const seats = (quote as any).seatCount ?? (quote as any).quantity ?? 1;
-  const packageUnit = Number(((quote as any).package?.unitPrice as any) ?? 0);
+  const packageUnit = Number((quote as any).package?.unitPrice ?? 0);
   const addOnSum = ((quote as any).addOns ?? []).reduce(
-    (acc: number, a: any) => acc + Number((a.unitPrice as any) ?? 0),
+    (acc: number, a: any) => acc + Number(a.unitPrice ?? 0),
     0,
   );
   const packageExtended = packageUnit * seats;
-  const subtotalNum = Number(quote.subtotal as any ?? 0) || packageExtended + addOnSum; // prefer server subtotal
-  const discountPct = Number(quote.discountPercent as any ?? 0);
+  const subtotalNum = Number((quote as any).subtotal ?? 0) || packageExtended + addOnSum;
+  const discountPct = Number((quote as any).discountPercent ?? 0);
   const discountValue = (subtotalNum * discountPct) / 100;
-  const totalNum = Number(quote.total as any ?? subtotalNum - discountValue);
+  const totalNum = Number((quote as any).total ?? subtotalNum - discountValue);
 
-  // Next pending step and duration
   const nextPending = quote.approvalWorkflow?.steps?.find((s) => s.status === "Pending");
   const pendingSince = nextPending?.updatedAt ?? nextPending?.createdAt ?? quote.createdAt;
 
@@ -540,7 +516,7 @@ export default function QuoteDetailPage() {
                       <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                         <Chip label={(nextPending.persona as string) ?? "—"} size="small" />
                         <Typography variant="body2" color="text.secondary">
-                          Pending {formatDistanceToNow(new Date(pendingSince as any), { addSuffix: true })}
+                          Pending {formatDistanceToNow(new Date(pendingSince as Date), { addSuffix: true })}
                         </Typography>
                       </Box>
                     </TableCell>
@@ -611,7 +587,7 @@ export default function QuoteDetailPage() {
                 {quote.paymentKind === "PREPAY" || quote.paymentKind === "BOTH" ? (
                   <TableRow>
                     <TableCell>Prepay %</TableCell>
-                    <TableCell>{(quote.prepayPercent as any)?.toString?.() ?? String(quote.prepayPercent ?? "—")}</TableCell>
+                    <TableCell>{(quote as any).prepayPercent?.toString?.() ?? String(quote.prepayPercent ?? "—")}</TableCell>
                   </TableRow>
                 ) : null}
               </TableBody>
@@ -648,7 +624,7 @@ export default function QuoteDetailPage() {
           setEditorOpen(false);
         }}
       >
-        <DialogTitle>Edit Approval Workflow</DialogTitle>
+        <DialogTitle sx={{ color: (t) => t.palette.common.white }}>Edit Approval Workflow</DialogTitle>
         <DialogContent dividers>
           <ApprovalWorkflowBuilder
             value={draftSteps}

@@ -27,7 +27,6 @@ function formatCurrency(n: number) {
 export default function InsightsPage() {
   const { data, isLoading } = api.insights.overview.useQuery();
 
-  // Live timer
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 1000);
@@ -60,7 +59,6 @@ export default function InsightsPage() {
         <Typography>Unable to load insights.</Typography>
       ) : (
         <>
-          {/* Top KPI cards */}
           <Box display="grid" gap={2} sx={{ gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)", md: "repeat(4, 1fr)" } }}>
             <Card variant="outlined">
               <CardHeader title="Total Quotes" />
@@ -88,7 +86,6 @@ export default function InsightsPage() {
             </Card>
           </Box>
 
-          {/* Outcome percentages */}
           <Card variant="outlined">
             <CardHeader title="Outcome Mix" />
             <CardContent>
@@ -100,7 +97,6 @@ export default function InsightsPage() {
             </CardContent>
           </Card>
 
-          {/* Quotes by stage with avg pending wait */}
           <Card variant="outlined">
             <CardHeader title="Quotes by Stage (Next Approver Persona)" />
             <CardContent>
@@ -117,7 +113,6 @@ export default function InsightsPage() {
             </CardContent>
           </Card>
 
-          {/* Avg approval time per persona */}
           <Card variant="outlined">
             <CardHeader title="Avg. Approval Time per Persona" />
             <CardContent>
@@ -136,7 +131,6 @@ export default function InsightsPage() {
             </CardContent>
           </Card>
 
-          {/* Value by status & discount insights */}
           <Box display="grid" gap={2} sx={{ gridTemplateColumns: { xs: "1fr", md: "repeat(2, 1fr)" } }}>
             <Card variant="outlined">
               <CardHeader title="Value by Status" />

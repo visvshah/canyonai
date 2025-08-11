@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { env } from "~/env";
-import { PaymentKind, Prisma } from "@prisma/client";
+import { PaymentKind } from "@prisma/client";
 import { createCaller } from "~/server/api/root";
 import { createTRPCContext } from "~/server/api/trpc";
 
@@ -65,8 +65,6 @@ export async function POST(req: Request) {
     const choice = chatJson?.choices?.[0];
     let message = choice?.message as any;
 
-    // Iterative tool-call loop to enable multi-step flows (find -> deduce -> create)
-    const toolMessages: OpenAIMessage[] = [];
 
     for (let safety = 0; safety < 4; safety++) {
       const toolCalls = message?.tool_calls ?? [];
@@ -88,7 +86,6 @@ export async function POST(req: Request) {
         }
         const results = await trpcCaller.quote.findSimilarQuotes(args);
         if (mode === "find") {
-          // In find mode, return results immediately to the UI
           return NextResponse.json({ type: "find_results", data: results });
         }
         const toolResult: OpenAIMessage = {
@@ -96,8 +93,6 @@ export async function POST(req: Request) {
           tool_call_id: call.id,
           content: JSON.stringify(results),
         };
-        toolMessages.push(toolResult);
-        // Continue the conversation with tool result
         const nextRes = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -115,8 +110,7 @@ export async function POST(req: Request) {
         }
         const nextJson = (await nextRes.json()) as any;
         message = nextJson?.choices?.[0]?.message;
-        // retain top-3 for UI cue if we end up creating in this request
-        similarUsedTop3 = results?.results?.slice(0, 3) ?? null;
+        // retain top-3 for UI cue if we end up creating in this request (handled later via top3)
         continue;
       }
 
@@ -185,8 +179,7 @@ export async function POST(req: Request) {
       break;
     }
 
-    // No (further) tool call
-    return NextResponse.json({ type: "assistant_message", message: message?.content });
+      return NextResponse.json({ type: "assistant_message", message: message?.content });
   } catch (err: any) {
     return NextResponse.json({ type: "error", message: err?.message ?? "Unexpected error" }, { status: 500 });
   }
@@ -329,9 +322,7 @@ function sanitizeCreateArgs(input: any) {
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
-function clampInt(n: number, min: number, max: number) {
-  return Math.round(clamp(n, min, max));
-}
+//
 
 async function safeText(res: Response) {
   try {

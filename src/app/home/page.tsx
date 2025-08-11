@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "~/trpc/react";
 import { Role } from "@prisma/client";
@@ -18,7 +19,14 @@ import {
   TableHead,
   TableRow,
   Typography,
+  Divider,
+  Card,
+  CardContent,
+  CardHeader,
 } from "@mui/material";
+import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
+import UploadFileIcon from "@mui/icons-material/UploadFile";
+import InsightsIcon from "@mui/icons-material/Insights";
 import { format } from "date-fns";
 
 function formatCurrency(value: unknown): string {
@@ -45,9 +53,9 @@ export default function HomePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const roles = useMemo(() => Object.values(Role) as readonly Role[], []);
-  const [selectedRole, setSelectedRole] = useState<Role>(roles[0]!);
+  const [selectedRole, setSelectedRole] = useState<Role>(roles[1] ?? roles[0]!); // default a bit more realistic for Zoom: Deal Desk
 
-  // Initialize role from query param if present and valid
+  // Persist role from query param
   useEffect(() => {
     const r = searchParams?.get("role");
     if (!r) return;
@@ -58,10 +66,23 @@ export default function HomePage() {
   }, [searchParams]);
 
   const utils = api.useUtils();
-  const { data: quotes, isLoading, refetch } = api.quote.pendingByRole.useQuery(
+
+  // Insights overview for KPI tiles
+  const { data: insights, isLoading: insightsLoading } = api.insights.overview.useQuery();
+
+  // Approval queue for selected role
+  const {
+    data: queue,
+    isLoading: queueLoading,
+    refetch: refetchQueue,
+  } = api.quote.pendingByRole.useQuery(
     { role: selectedRole },
     { staleTime: 0 },
   );
+
+  // Recent quotes (limit client-side)
+  const { data: allQuotes, isLoading: allLoading } = api.quote.all.useQuery();
+  const recentQuotes = useMemo(() => (allQuotes ?? []).slice(0, 6), [allQuotes]);
 
   const approveMutation = api.quote.approveNextForRole.useMutation({
     onSuccess: async () => {
@@ -77,89 +98,216 @@ export default function HomePage() {
   };
 
   return (
-    <main className="flex min-h-screen flex-col gap-6 p-6">
-      <Typography variant="h5" fontWeight={600} gutterBottom>
-        Quotes waiting for your approval
-      </Typography>
+    <main>
+      {/* Hero / Zoom banner */}
+      <Box
+        sx={{
+          p: { xs: 3, md: 4 },
+          background: (t) =>
+            `linear-gradient(135deg, ${t.palette.primary.main}22 0%, ${t.palette.secondary.main}22 50%, transparent 100%)`,
+          borderBottom: (t) => `1px solid ${t.palette.divider}`,
+        }}
+      >
+        <Stack direction={{ xs: "column", md: "row" }} alignItems={{ md: "center" }} spacing={2} justifyContent="space-between">
+          <Box>
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+              <Chip label="Mock MVP" color="primary" variant="filled" size="small" />
+              <Chip label="For Zoom" color="secondary" variant="outlined" size="small" />
+            </Stack>
+            <Typography variant="h4" fontWeight={800} mt={1}>
+              Deal Desk & Quote Approvals
+            </Typography>
+            <Typography variant="body1" color="text.secondary" mt={0.5} maxWidth={900}>
+              A focused workflow to help Zoom streamline approvals, align stakeholders across AE, Deal Desk, Finance, CRO and Legal,
+              and move high‑value deals to “Sold” faster.
+            </Typography>
+          </Box>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+            <Button component={Link} href="/create-quote" variant="contained" startIcon={<AddCircleOutlineIcon />}>
+              Create Quote
+            </Button>
+            <Button component={Link} href="/import" variant="outlined" startIcon={<UploadFileIcon />}>Import</Button>
+            <Button component={Link} href="/insights" variant="outlined" startIcon={<InsightsIcon />}>Insights</Button>
+          </Stack>
+        </Stack>
+      </Box>
 
-      <Stack direction="row" spacing={1} alignItems="center">
-        <Typography variant="subtitle2">Select role:</Typography>
-        {roles.map((r) => (
-          <Chip
-            key={r}
-            label={r}
-            clickable
-            color={selectedRole === r ? "primary" : "default"}
-            onClick={() => {
-              setSelectedRole(r);
-              const params = new URLSearchParams(searchParams ?? undefined);
-              params.set("role", r);
-              router.push(`/home?${params.toString()}`);
-            }}
-            variant={selectedRole === r ? "filled" : "outlined"}
-            sx={{ textTransform: "uppercase" }}
-          />
-        ))}
-        <Button size="small" onClick={() => refetch()} disabled={isLoading}>
-          Refresh
-        </Button>
-      </Stack>
-
-      {isLoading ? (
-        <Box display="flex" justifyContent="center" py={4}>
-          <CircularProgress size={24} />
+      {/* Content */}
+      <Box sx={{ p: { xs: 2, md: 3 }, display: "flex", flexDirection: "column", gap: 3 }}>
+        {/* KPI Tiles */}
+        <Box>
+          <Typography variant="overline" color="text.secondary">Zoom pipeline snapshot</Typography>
+          {insightsLoading ? (
+            <Box mt={1}>
+              <CircularProgress size={20} />
+            </Box>
+          ) : insights ? (
+            <Box display="grid" gap={2} sx={{ gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4, 1fr)" } }}>
+              <Card variant="outlined">
+                <CardHeader title="Total Quotes" />
+                <CardContent>
+                  <Typography variant="h5" fontWeight={700}>{insights.totals.totalQuotes}</Typography>
+                </CardContent>
+              </Card>
+              <Card variant="outlined">
+                <CardHeader title="Pending" />
+                <CardContent>
+                  <Typography variant="h5" fontWeight={700}>{insights.totals.totalPending}</Typography>
+                  <Typography variant="body2" color="text.secondary">{formatPercent(insights.outcomePercentages.pendingPct)}</Typography>
+                </CardContent>
+              </Card>
+              <Card variant="outlined">
+                <CardHeader title="Approved" />
+                <CardContent>
+                  <Typography variant="h5" fontWeight={700}>{insights.totals.totalApproved}</Typography>
+                  <Typography variant="body2" color="text.secondary">{formatPercent(insights.outcomePercentages.approvedPct)}</Typography>
+                </CardContent>
+              </Card>
+              <Card variant="outlined">
+                <CardHeader title="Sold" />
+                <CardContent>
+                  <Typography variant="h5" fontWeight={700}>{insights.totals.totalSold}</Typography>
+                  <Typography variant="body2" color="text.secondary">Value {formatCurrency(insights.totals.totalValueSold)}</Typography>
+                </CardContent>
+              </Card>
+            </Box>
+          ) : (
+            <Typography color="text.secondary">Unable to load insights.</Typography>
+          )}
         </Box>
-      ) : !quotes || quotes.length === 0 ? (
-        <Typography>No quotes pending for {selectedRole}.</Typography>
-      ) : (
-        <TableContainer component={Paper} variant="outlined">
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Customer</TableCell>
-                <TableCell>Org</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Discount</TableCell>
-                <TableCell>Total</TableCell>
-                <TableCell>Created</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {quotes.map((q) => (
-                <TableRow
-                  key={q.id}
-                  hover
-                  sx={{ cursor: "pointer" }}
-                  onClick={() => router.push(`/quotes/${q.id}?from=home&role=${selectedRole}`)}
-                >
-                  <TableCell>{q.customerName}</TableCell>
-                  <TableCell>{q.org.name}</TableCell>
-                  <TableCell>
-                    <Chip label={q.status} size="small" />
-                  </TableCell>
-                  <TableCell>{formatPercent(q.discountPercent as any)}</TableCell>
-                  <TableCell>{formatCurrency(q.total as any)}</TableCell>
-                  <TableCell>{format(new Date(q.createdAt), "MMM d, yyyy")}</TableCell>
-                  <TableCell align="right">
-                    <Button
-                      size="small"
-                      variant="contained"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void handleApprove(q.id);
+
+        <Divider flexItem sx={{ opacity: 0.2 }} />
+
+        {/* Approval Queue + Recent Quotes */}
+        <Box display="grid" gap={3} sx={{ gridTemplateColumns: { xs: "1fr", lg: "1.2fr 1fr" } }}>
+          {/* Left: Your approval queue */}
+          <Card variant="outlined">
+            <CardHeader
+              title={
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <Typography variant="h6" fontWeight={700}>Your Approval Queue</Typography>
+                  <Chip color="primary" variant="outlined" label={selectedRole} sx={{ textTransform: "uppercase" }} />
+                </Stack>
+              }
+              action={
+                <Stack direction="row" spacing={1} alignItems="center" sx={{ pr: 1 }}>
+                  {(roles).map((r) => (
+                    <Chip
+                      key={r}
+                      label={r}
+                      clickable
+                      color={selectedRole === r ? "primary" : "default"}
+                      variant={selectedRole === r ? "filled" : "outlined"}
+                      onClick={() => {
+                        setSelectedRole(r);
+                        const params = new URLSearchParams(searchParams ?? undefined);
+                        params.set("role", r);
+                        router.push(`/home?${params.toString()}`);
                       }}
-                      disabled={approveMutation.isPending}
-                    >
-                      Approve
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
+                      sx={{ textTransform: "uppercase" }}
+                    />
+                  ))}
+                  <Button size="small" onClick={() => refetchQueue()} disabled={queueLoading}>Refresh</Button>
+                </Stack>
+              }
+            />
+            <CardContent>
+              {queueLoading ? (
+                <Box display="flex" justifyContent="center" py={3}>
+                  <CircularProgress size={22} />
+                </Box>
+              ) : !queue || queue.length === 0 ? (
+                <Typography color="text.secondary">No quotes pending for {selectedRole}.</Typography>
+              ) : (
+                <TableContainer component={Paper} variant="outlined" sx={{ background: "transparent" }}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Customer</TableCell>
+                        <TableCell>Org</TableCell>
+                        <TableCell>Status</TableCell>
+                        <TableCell>Discount</TableCell>
+                        <TableCell>Total</TableCell>
+                        <TableCell>Created</TableCell>
+                        <TableCell align="right">Actions</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {queue.map((q) => (
+                        <TableRow
+                          key={q.id}
+                          hover
+                          sx={{ cursor: "pointer" }}
+                          onClick={() => router.push(`/quotes/${q.id}?from=home&role=${selectedRole}`)}
+                        >
+                          <TableCell>{q.customerName}</TableCell>
+                          <TableCell>{q.org.name}</TableCell>
+                          <TableCell><Chip label={q.status} size="small" /></TableCell>
+                          <TableCell>{formatPercent(q.discountPercent as unknown as number)}</TableCell>
+                          <TableCell>{formatCurrency(q.total as unknown as number)}</TableCell>
+                          <TableCell>{format(new Date(q.createdAt), "MMM d, yyyy")}</TableCell>
+                          <TableCell align="right">
+                            <Button
+                              size="small"
+                              variant="contained"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleApprove(q.id);
+                              }}
+                              disabled={approveMutation.isPending}
+                            >
+                              Approve
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Right: Recent quotes */}
+          <Card variant="outlined">
+            <CardHeader title={<Typography variant="h6" fontWeight={700}>Recent Quotes</Typography>} />
+            <CardContent>
+              {allLoading ? (
+                <Box display="flex" justifyContent="center" py={3}><CircularProgress size={22} /></Box>
+              ) : recentQuotes.length === 0 ? (
+                <Typography color="text.secondary">No recent quotes.</Typography>
+              ) : (
+                <TableContainer component={Paper} variant="outlined" sx={{ background: "transparent" }}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Customer</TableCell>
+                        <TableCell>Status</TableCell>
+                        <TableCell>Total</TableCell>
+                        <TableCell>Created</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {recentQuotes.map((q) => (
+                        <TableRow key={q.id} hover sx={{ cursor: "pointer" }} onClick={() => router.push(`/quotes/${q.id}`)}>
+                          <TableCell>{q.customerName}</TableCell>
+                          <TableCell><Chip label={q.status} size="small" /></TableCell>
+                          <TableCell>{formatCurrency(q.total as unknown as number)}</TableCell>
+                          <TableCell>{format(new Date(q.createdAt), "MMM d, yyyy")}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+
+              <Stack direction="row" justifyContent="flex-end" mt={1}>
+                <Button component={Link} href="/quotes" size="small">View all quotes</Button>
+              </Stack>
+            </CardContent>
+          </Card>
+        </Box>
+      </Box>
     </main>
   );
 }

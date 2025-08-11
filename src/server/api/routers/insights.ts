@@ -21,7 +21,6 @@ export const insightsRouter = createTRPCRouter({
       orderBy: { createdAt: "desc" },
     });
 
-    // Pipeline by status
     const pipelineByStatus: Record<QuoteStatus, number> = {
       [QuoteStatus.Pending]: 0,
       [QuoteStatus.Approved]: 0,
@@ -29,7 +28,6 @@ export const insightsRouter = createTRPCRouter({
       [QuoteStatus.Sold]: 0,
     };
 
-    // Quotes by next stage persona (first pending step)
     const quotesByStage: Record<Role, number> = {
       [Role.AE]: 0,
       [Role.DEALDESK]: 0,
@@ -38,7 +36,6 @@ export const insightsRouter = createTRPCRouter({
       [Role.FINANCE]: 0,
     };
 
-    // Pending wait time accumulator for next approver persona
     const pendingWaitAgg: Record<Role, { totalMs: Millis; count: number }> = {
       [Role.AE]: { totalMs: 0, count: 0 },
       [Role.DEALDESK]: { totalMs: 0, count: 0 },
@@ -47,7 +44,6 @@ export const insightsRouter = createTRPCRouter({
       [Role.FINANCE]: { totalMs: 0, count: 0 },
     };
 
-    // Average approval time per persona in ms
     const personaDurations: Record<Role, { totalMs: Millis; count: number }> = {
       [Role.AE]: { totalMs: 0, count: 0 },
       [Role.DEALDESK]: { totalMs: 0, count: 0 },
@@ -103,19 +99,12 @@ export const insightsRouter = createTRPCRouter({
 
       const steps = q.approvalWorkflow?.steps ?? [];
 
-      // Determine next stage persona for pending quotes
       if (q.status === QuoteStatus.Pending) {
         const pendingIndex = steps.findIndex((s) => s.status === ApprovalStatus.Pending);
         if (pendingIndex >= 0) {
           const pendingStep = steps[pendingIndex]!;
           quotesByStage[pendingStep.persona] += 1;
 
-          // Determine when this pending step started.
-          // Robust baseline:
-          // - step.updatedAt when it became Pending (preferred)
-          // - step.createdAt (covers newly-inserted steps)
-          // - last previous step approvedAt (normal progression)
-          // - quote.createdAt (final fallback)
           let lastPrevApprovedAt: Date | null = null;
           for (let j = pendingIndex - 1; j >= 0; j--) {
             const prev = steps[j]!;
@@ -130,7 +119,6 @@ export const insightsRouter = createTRPCRouter({
           if (lastPrevApprovedAt) candidates.push(lastPrevApprovedAt);
           if (q.updatedAt) candidates.push(q.updatedAt);
           candidates.push(q.createdAt);
-          // Use the most recent candidate to avoid backdating inserted steps
           const waitStart = new Date(Math.max(...candidates.map((d) => d.getTime())));
           const waitMs = Math.max(0, now.getTime() - waitStart.getTime());
           const agg = pendingWaitAgg[pendingStep.persona];
@@ -139,7 +127,6 @@ export const insightsRouter = createTRPCRouter({
         }
       }
 
-      // Compute approval times per persona as (approvedAt - updatedAtWhenBecamePending)
       for (let i = 0; i < steps.length; i++) {
         const step = steps[i]!;
         if ((step.status === ApprovalStatus.Approved || step.status === ApprovalStatus.Rejected) && step.approvedAt) {
@@ -150,13 +137,11 @@ export const insightsRouter = createTRPCRouter({
           agg.totalMs += ms;
           agg.count += 1;
           if (step.status === ApprovalStatus.Rejected) {
-            // Stop at rejection
             break;
           }
         }
       }
 
-      // Time to full approval (all steps approved)
       if (steps.length > 0 && steps.every((s) => s.status === "Approved") && steps[steps.length - 1]?.approvedAt) {
         const lastApprovedAt = steps[steps.length - 1]!.approvedAt!;
         const ms = Math.max(0, lastApprovedAt.getTime() - q.createdAt.getTime());

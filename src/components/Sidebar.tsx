@@ -2,17 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import {
-  Drawer,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
-  Toolbar,
-  Box,
-  Typography,
-} from "@mui/material";
+import { Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Toolbar, Box } from "@mui/material";
 import ListAltIcon from "@mui/icons-material/ListAlt";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 import InsightsIcon from "@mui/icons-material/Insights";
@@ -31,7 +21,6 @@ const NAV_ITEMS = [
 
 export default function Sidebar() {
   const pathname = usePathname();
-  // Hide sidebar on landing page
   if (pathname === "/") {
     return null;
   }

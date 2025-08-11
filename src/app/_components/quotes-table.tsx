@@ -7,7 +7,6 @@ import { format } from "date-fns";
 import { Box, TextField, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Chip, CircularProgress, Typography } from "@mui/material";
 import { useRouter } from "next/navigation";
 
-// Helper types
 export type Quote = RouterOutputs["quote"]["all"][number];
 
 function getNextApproval(quote: Quote): string {
@@ -27,10 +26,7 @@ export function QuotesTable() {
   const router = useRouter();
   const [search, setSearch] = useState("");
 
-  const {
-    data: quotes,
-    isLoading,
-  } = api.quote.all.useQuery(
+  const { data: quotes, isLoading } = api.quote.all.useQuery(
     search.trim() ? { search } : {},
     {
       staleTime: 1000 * 60, // 1 minute
