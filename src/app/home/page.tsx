@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "~/trpc/react";
@@ -49,7 +49,7 @@ function formatPercent(value: unknown): string {
   return `${num.toFixed(1)}%`;
 }
 
-export default function HomePage() {
+function HomePageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const roles = useMemo(() => Object.values(Role) as readonly Role[], []);
@@ -262,6 +262,20 @@ export default function HomePage() {
           </Card>
       </Box>
     </main>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <Suspense
+      fallback={
+        <Box p={3} display="flex" justifyContent="center">
+          <CircularProgress size={24} />
+        </Box>
+      }
+    >
+      <HomePageContent />
+    </Suspense>
   );
 }
 
