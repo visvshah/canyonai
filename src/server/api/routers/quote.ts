@@ -336,7 +336,7 @@ export const quoteRouter = createTRPCRouter({
       const addOnIdSet = new Set(params.addOnIds ?? []);
 
       const seats = params.seats;
-      const seatBand = seats != null ? Math.max(2, Math.round(seats * 0.2)) : null;
+      const seatBandAbs = 20; // ±20 seats range
 
       const scored = candidates.map((q) => {
         let score = 0;
@@ -357,30 +357,32 @@ export const quoteRouter = createTRPCRouter({
           }
         }
 
-        // Seats proximity
-        if (seats != null && seatBand != null) {
+        // Seats proximity (±20 seats band)
+        if (seats != null) {
           const diff = Math.abs(q.quantity - seats);
           if (diff === 0) {
             score += 3;
             reasons.push("exact seat count");
-          } else if (diff <= Math.max(1, Math.round((seatBand * 0.5)))) {
+          } else if (diff <= 10) {
             score += 2;
             reasons.push("close seat count");
-          } else if (diff <= seatBand) {
+          } else if (diff <= seatBandAbs) {
             score += 1;
             reasons.push("within seat band");
           }
         }
 
-        // Discount proximity
+        // Discount proximity (within ±10% of provided discount percentage)
         if (params.discountPercent != null) {
-          const diff = Math.abs(Number(q.discountPercent) - params.discountPercent);
-          if (diff <= 2) {
+          const provided = params.discountPercent;
+          const diff = Math.abs(Number(q.discountPercent) - provided);
+          const allowed = Math.max(1, Math.round(provided * 0.1));
+          if (diff === 0) {
             score += 2;
-            reasons.push("discount ±2%");
-          } else if (diff <= 5) {
+            reasons.push("exact discount");
+          } else if (diff <= allowed) {
             score += 1;
-            reasons.push("discount ±5%");
+            reasons.push("discount in range");
           }
         }
 
@@ -416,7 +418,7 @@ export const quoteRouter = createTRPCRouter({
       const ranked = scored
         .filter((s) => s.score > 0)
         .sort((a, b) => (b.score - a.score) || (b.q.createdAt.getTime() - a.q.createdAt.getTime()))
-        .slice(0, 20)
+        .slice(0, 10)
         .map(({ q, score, reasons }) => ({
           quoteId: q.id,
           createdAt: q.createdAt,

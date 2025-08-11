@@ -61,6 +61,7 @@ export default function CreateQuotePage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [hasStoppedChat, setHasStoppedChat] = useState(false);
   const [findResults, setFindResults] = useState<FindResultItem[]>([]);
+  const [similarCue, setSimilarCue] = useState<FindResultItem[] | null>(null);
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   // No persistence; back navigation will reset chat
@@ -83,7 +84,13 @@ export default function CreateQuotePage() {
         addOnList ? `\nAvailable add-ons:\n- ${addOnList}` : "",
       ].filter(Boolean).join("\n");
     }
-    return "Tell me the quote details and I’ll create it when ready.";
+    return [
+      "I can create a quote. Minimal: package (name or id) and customerName; add-ons optional.",
+      "If seats/discount/payment are missing, I’ll infer from similar quotes and proceed.",
+      "Helpful optional fields: seats, discountPercent, paymentKind, netDays, prepayPercent.",
+      pkgList ? `\nAvailable packages:\n- ${pkgList}` : "",
+      addOnList ? `\nAvailable add-ons:\n- ${addOnList}` : "",
+    ].filter(Boolean).join("\n");
   }, [catalog, mode]);
 
   // Initial greeting on mount
@@ -98,6 +105,7 @@ export default function CreateQuotePage() {
     setIsProcessing(false);
     setHasStoppedChat(false);
     setFindResults([]);
+    setSimilarCue(null);
   }, [mode]);
 
   const pushAssistant = (content: string) => setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "assistant", content }]);
@@ -129,16 +137,33 @@ export default function CreateQuotePage() {
     const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
+    if (mode === "create") {
+      // Minimal inline feedback while server infers missing fields
+      pushAssistant("Searching similar quotes and inferring fields…");
+    }
     setIsProcessing(true);
     try {
       const resp = await callAi([...messages, userMsg]);
       if (resp.type === "assistant_message") {
         pushAssistant(resp.message);
       } else if (resp.type === "find_results") {
-        setHasStoppedChat(true);
-        setFindResults(resp.data.results ?? []);
+        if (mode === "find") {
+          setHasStoppedChat(true);
+          setFindResults(resp.data.results ?? []);
+        } else {
+          // Create mode: show a lightweight cue but keep chatting
+          setSimilarCue((resp.data.results ?? []).slice(0, 3));
+        }
       } else if (resp.type === "quote_created") {
-        router.replace(`/quotes/${resp.quoteId}`);
+        // If creation used similarity, show a brief cue before redirecting
+        if (mode === "create" && resp.data?.similarUsedTop3) {
+          setSimilarCue(resp.data.similarUsedTop3 as FindResultItem[]);
+          pushAssistant("Created from similar quotes.");
+          // small delay to surface cue
+          setTimeout(() => router.replace(`/quotes/${resp.quoteId}`), 800);
+        } else {
+          router.replace(`/quotes/${resp.quoteId}`);
+        }
       } else if (resp.type === "error") {
         pushAssistant(`Error: ${resp.message}`);
       }
@@ -228,6 +253,38 @@ export default function CreateQuotePage() {
               {messages.map((m) => (
                 <ChatBubble key={m.id} message={m} />
               ))}
+              {mode === "create" && similarCue && similarCue.length > 0 && (
+                <Box sx={{ mt: 1 }}>
+                  <Paper variant="outlined" sx={{ p: 1, backgroundColor: (t) => t.palette.action.hover }}>
+                    <Box display="flex" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5 }}>
+                      <Typography variant="caption" fontWeight={600}>Found similar quotes ({similarCue.length})</Typography>
+                      <Button size="small" variant="text" onClick={() => setSimilarCue(null)}>Hide</Button>
+                    </Box>
+                    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.75 }}>
+                      {similarCue.map((r) => (
+                        <Paper
+                          key={r.quoteId}
+                          variant="outlined"
+                          sx={{ p: 1, cursor: "pointer" }}
+                          onClick={() => window.open(`/quotes/${r.quoteId}`, "_blank", "noopener,noreferrer")}
+                        >
+                          <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+                            <Chip size="small" label={r.package.name} />
+                            <Chip size="small" label={`Seats ${r.quantity}`} />
+                            <Chip size="small" label={`${r.paymentKind}`} />
+                            <Chip size="small" label={`${format(new Date(r.createdAt), "MMM d, yyyy")}`} />
+                          </Box>
+                          <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap", mt: 0.5 }}>
+                            {r.similarity.reasons.slice(0, 3).map((reason, idx) => (
+                              <Chip key={idx} size="small" label={reason} variant="outlined" />
+                            ))}
+                          </Box>
+                        </Paper>
+                      ))}
+                    </Box>
+                  </Paper>
+                </Box>
+              )}
               <div ref={chatEndRef} />
             </Box>
             {!hasStoppedChat && (
