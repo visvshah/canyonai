@@ -717,11 +717,13 @@ export default function QuoteDetailPage() {
       {quote.documentHtml ? (
         <Box>
           <Typography variant="subtitle1" gutterBottom>
-            Contract Preview
+            Contract
           </Typography>
-          <Paper variant="outlined" sx={{ p: 1.5 }}>
-            {/* eslint-disable-next-line react/no-danger */}
-            <div dangerouslySetInnerHTML={{ __html: quote.documentHtml }} />
+          <Paper
+            variant="outlined"
+            sx={{ p: 1.5, whiteSpace: "pre-wrap", fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace', fontSize: '0.9rem' }}
+          >
+            {quote.documentHtml}
           </Paper>
         </Box>
       ) : null}

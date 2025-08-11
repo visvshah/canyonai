@@ -448,7 +448,7 @@ export const quoteRouter = createTRPCRouter({
 
   /**
    * Create a new quote from structured inputs, resolve package/add-ons, compute pricing, and
-   * generate an HTML contract. Falls back to a local template if no LLM is available.
+   * generate an HTML contract.
    */
   createQuote: publicProcedure
     .input(
@@ -569,22 +569,7 @@ export const quoteRouter = createTRPCRouter({
         try {
           const apiKey = env.OPENAI_KEY;
           if (!apiKey) return null;
-          const prompt = `Create a concise, professional SaaS order form as minimal HTML only (no markdown). Include: Quote ID ${ci.quoteId}, Customer ${ci.customerName}, Package ${ci.productName} x ${ci.seats} seats, Add-ons ${ci.addOns.join(", ") || "None"}, Subtotal $${ci.subtotal.toFixed ? ci.subtotal.toFixed(2) : ci.subtotal}, Discount ${ci.discountPercent}%, Total $${ci.total.toFixed ? ci.total.toFixed(2) : ci.total}, Payment ${ci.paymentKind}${ci.netDays ? ", Net " + ci.netDays + " days" : ""}${ci.prepayPercent ? ", Prepay " + ci.prepayPercent + "%" : ""}. Use simple inline styles, and headings for sections.`;
-
-          const responsesRes = await fetch("https://api.openai.com/v1/responses", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-            body: JSON.stringify({
-              model: "gpt-4o-mini",
-              input: prompt,
-              temperature: 0.3,
-            }),
-          });
-          if (responsesRes.ok) {
-            const data = (await responsesRes.json()) as any;
-            const out = data?.output_text ?? data?.content?.[0]?.text ?? null;
-            if (out && typeof out === "string") return out.trim();
-          }
+          const prompt = `Create a concise, professional software subscription contract in plain text (no markdown, no HTML). Details: Contract/Quote ID ${ci.quoteId}, Customer ${ci.customerName}, Product ${ci.productName} x ${ci.seats} seats, Add-ons ${ci.addOns.join(", ") || "None"}, Subtotal $${ci.subtotal.toFixed ? ci.subtotal.toFixed(2) : ci.subtotal}, Discount ${ci.discountPercent}%, Total $${ci.total.toFixed ? ci.total.toFixed(2) : ci.total}, Payment ${ci.paymentKind}${ci.netDays ? ", Net " + ci.netDays + " days" : ""}${ci.prepayPercent ? ", Prepay " + ci.prepayPercent + "%" : ""}. Use clear section headings like: Parties, Services, Commercial Terms, Payment Terms, Acceptance. Our company is Zoom Communications. Output raw plain text only.`;
 
           const chatRes = await fetch("https://api.openai.com/v1/chat/completions", {
             method: "POST",
@@ -592,7 +577,7 @@ export const quoteRouter = createTRPCRouter({
             body: JSON.stringify({
               model: "gpt-4o-mini",
               messages: [
-                { role: "system", content: "You generate short, production-ready HTML contracts. Output raw HTML only." },
+                { role: "system", content: "You generate short, production-ready contracts." },
                 { role: "user", content: prompt },
               ],
               temperature: 0.3,
